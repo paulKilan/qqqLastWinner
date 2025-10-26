@@ -12,7 +12,6 @@ def _load_prices(path: str) -> pd.DataFrame:
     Loads Investing.com CSV (columns: Date, Price, Open, High, Low, Vol., Change %)
     and normalizes to ['open', 'close'] for backtest use.
     """
-    import pandas as pd
 
     df = pd.read_csv(path)
 
@@ -28,9 +27,9 @@ def _load_prices(path: str) -> pd.DataFrame:
     out = df[["Open", "Price"]].copy()
     out.columns = ["open", "close"]
 
-    # Convert to numeric, drop NaN
-    out["open"] = pd.to_numeric(out["open"], errors="coerce")
-    out["close"] = pd.to_numeric(out["close"], errors="coerce")
+    # Convert to numeric, drop NaN (handle comma-separated numbers)
+    out["open"] = pd.to_numeric(out["open"].astype(str).str.replace(",", ""), errors="coerce")
+    out["close"] = pd.to_numeric(out["close"].astype(str).str.replace(",", ""), errors="coerce")
     out = out.dropna(subset=["open", "close"])
 
     return out
@@ -43,9 +42,6 @@ def main():
     initial_capital = 10_000
     trade_price = "open"                 # day t + 1 "open" or "close" (open price by default)
     share_rounding = "floor"             # "floor" | "nearest" | "fractional" (floor by default)
-    # optional frictions (disabled by default)
-    slippage_bps = None
-    commission_bps = None
     contextData = {}                     # free-form JSON-like dict, passed to strategy.execute
     # ==============================
 
@@ -65,8 +61,6 @@ def main():
         initial_capital=initial_capital,
         trade_price=trade_price,          # t+1 open by default
         share_rounding=share_rounding,
-        slippage_bps=slippage_bps,
-        commission_bps=commission_bps,
     )
 
     # run
@@ -82,19 +76,14 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     trades_path = os.path.join(OUTPUT_DIR, f"trades_{ts}.csv")
-    equity_path = os.path.join(OUTPUT_DIR, f"equity_{ts}.csv")
-    issues_path = os.path.join(OUTPUT_DIR, f"issues_{ts}.csv")
 
     trades.to_csv(trades_path, index=False)
-    equity.to_csv(equity_path)
-    issues.to_csv(issues_path, index=False)
 
     print("✅Backtest complete")
     print(f"Trades : {trades_path}")
-    print(f"Equity : {equity_path}")
-    print(f"Issues : {issues_path}")
-    if not equity.empty:
-        print(f"Final Equity: ${equity['Equity'].iloc[-1]:,.2f} | Total trades: {len(trades)}")
+    if not trades.empty:
+        print(f"Total trades: {len(trades)}")
+        print(f"Final Equity: ${equity['Equity'].iloc[-1]:,.2f}")
 
 if __name__ == "__main__":
     main()

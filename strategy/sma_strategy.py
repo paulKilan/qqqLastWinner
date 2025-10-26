@@ -7,7 +7,6 @@ This strategy implements a classic golden cross/death cross trading system:
 """
 
 import pandas as pd
-import numpy as np
 from typing import Optional, Dict, Any
 from .base_strategy import BaseStrategy
 

@@ -9,7 +9,6 @@ import pandas as pd
 import os
 from datetime import datetime
 from typing import Optional, Dict, Any
-import warnings
 
 
 class BaseStrategy:
