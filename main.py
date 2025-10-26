@@ -38,7 +38,7 @@ def _load_prices(path: str) -> pd.DataFrame:
 def main():
     # === user-configurable bits ===
     strategy_module = "strategy.sma_strategy"
-    start_date = "2022-01-01"
+    start_date = "2011-01-01"
     end_date   = "2025-09-30"
     initial_capital = 10_000
     trade_price = "open"                 # day t + 1 "open" or "close" (open price by default)

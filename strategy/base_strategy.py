@@ -141,6 +141,7 @@ class BaseStrategy:
     def _filter_data_by_date_range(self, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
         """
         Filter data by date range and validate availability.
+        If exact dates don't exist, find the nearest trading days.
         
         Args:
             start_dt (datetime): Start date
@@ -152,14 +153,33 @@ class BaseStrategy:
         if self._data is None:
             raise Exception("Data not loaded")
         
-        # Check if start date exists in data
-        if start_dt not in self._data.index:
-            available_dates = self._data.index
-            closest_date = min(available_dates, key=lambda x: abs((x - start_dt).days))
-            raise ValueError(f"Start date {start_dt.strftime('%Y-%m-%d')} not found in data. Closest available: {closest_date.strftime('%Y-%m-%d')}")
+        # Find the nearest trading days if exact dates don't exist
+        available_dates = self._data.index
+        
+        # For start date: find the first trading day >= start_dt
+        if start_dt in available_dates:
+            actual_start = start_dt
+        else:
+            # Find first trading day on or after start_dt
+            future_dates = available_dates[available_dates >= start_dt]
+            if len(future_dates) == 0:
+                raise ValueError(f"No trading data available on or after {start_dt.strftime('%Y-%m-%d')}")
+            actual_start = future_dates[0]
+            print(f"Warning: Start date {start_dt.strftime('%Y-%m-%d')} is not a trading day. Using {actual_start.strftime('%Y-%m-%d')} instead.")
+        
+        # For end date: find the last trading day <= end_dt
+        if end_dt in available_dates:
+            actual_end = end_dt
+        else:
+            # Find last trading day on or before end_dt
+            past_dates = available_dates[available_dates <= end_dt]
+            if len(past_dates) == 0:
+                raise ValueError(f"No trading data available on or before {end_dt.strftime('%Y-%m-%d')}")
+            actual_end = past_dates[-1]
+            print(f"Warning: End date {end_dt.strftime('%Y-%m-%d')} is not a trading day. Using {actual_end.strftime('%Y-%m-%d')} instead.")
         
         # Filter data for the date range (inclusive)
-        mask = (self._data.index >= start_dt) & (self._data.index <= end_dt)
+        mask = (self._data.index >= actual_start) & (self._data.index <= actual_end)
         filtered_data = self._data.loc[mask].copy()
         
         return filtered_data
