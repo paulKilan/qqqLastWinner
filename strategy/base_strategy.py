@@ -23,7 +23,7 @@ class BaseStrategy:
     def __init__(self):
         """Initialize the BaseStrategy with default data path."""
         self.data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
-        self.data_file = 'QQQ_with_SMAs.csv'
+        self.data_file = 'QQQ_with_SMAs.csv'  # Default file, can be overridden by derived classes
         self._data = None
         
     def execute(self, startDate: str, endDate: str, contextData: Optional[Dict[str, Any]] = None) -> pd.DataFrame:

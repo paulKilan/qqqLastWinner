@@ -1,44 +1,78 @@
 """
-SMA50/250 Crossover Trading Strategy
+SMA Crossover Trading Strategy
 
-This strategy implements a classic golden cross/death cross trading system:
-- Golden Cross (SMA50 > SMA250): 100% TQQQ (3x leveraged QQQ)
-- Death Cross (SMA50 < SMA250): 100% SQQQ (3x inverse QQQ)
+This strategy implements a configurable golden cross/death cross trading system:
+- Golden Cross (Fast SMA > Slow SMA): 100% TQQQ (3x leveraged QQQ)
+- Death Cross (Fast SMA < Slow SMA): 100% SQQQ (3x inverse QQQ)
 """
 
 import pandas as pd
 from typing import Optional, Dict, Any
 from .base_strategy import BaseStrategy
 
+# =============================================================================
+# CONFIGURATION - Change these values to switch SMA periods
+# =============================================================================
+FAST_SMA_PERIOD = 20    # Fast SMA period (e.g., 20, 50)
+SLOW_SMA_PERIOD = 60    # Slow SMA period (e.g., 60, 250)
 
-class SMA50250Strategy(BaseStrategy):
+# Expected column names in the data (update if your CSV has different names)
+FAST_SMA_COLUMN = f'SMA_{FAST_SMA_PERIOD}'  # e.g., 'SMA_50' or 'SMA_20'
+SLOW_SMA_COLUMN = f'SMA_{SLOW_SMA_PERIOD}'  # e.g., 'SMA_250' or 'SMA_60'
+
+# Data file configuration (automatically switches based on SMA periods)
+DATA_FILE = f'QQQ_with_SMAs_{FAST_SMA_PERIOD}_{SLOW_SMA_PERIOD}.csv'  # e.g., 'QQQ_with_SMAs_20_60.csv'
+# =============================================================================
+
+
+class SMAStrategy(BaseStrategy):
     """
-    SMA50/250 crossover trading strategy.
+    Configurable SMA crossover trading strategy.
     
     Trading Rules:
-    - When SMA50 crosses above SMA250 (Golden Cross): 100% TQQQ, 0% SQQQ
-    - When SMA50 crosses below SMA250 (Death Cross): 0% TQQQ, 100% SQQQ
+    - When Fast SMA crosses above Slow SMA (Golden Cross): 100% TQQQ, 0% SQQQ
+    - When Fast SMA crosses below Slow SMA (Death Cross): 0% TQQQ, 100% SQQQ
     
     Position Allocation:
     - longPositionPct: Percentage allocated to TQQQ (3x leveraged QQQ)
     - shortPositionPct: Percentage allocated to SQQQ (3x inverse QQQ)
+    
+    Current Configuration:
+    - Fast SMA: {FAST_SMA_PERIOD} periods
+    - Slow SMA: {SLOW_SMA_PERIOD} periods
     """
     
     def __init__(self):
-        """Initialize the SMA50/250 crossover strategy."""
+        """Initialize the SMA crossover strategy."""
         super().__init__()
+        self.fast_sma_period = FAST_SMA_PERIOD
+        self.slow_sma_period = SLOW_SMA_PERIOD
+        self.fast_sma_column = FAST_SMA_COLUMN
+        self.slow_sma_column = SLOW_SMA_COLUMN
+        
+        # Override the data file from base strategy
+        self.data_file = DATA_FILE
+        
+        print(f"SMA Strategy initialized with {self.fast_sma_period}/{self.slow_sma_period} crossover")
+        print(f"Using data file: {self.data_file}")
     
     def _calculate_positions(self, data: pd.DataFrame, contextData: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """
-        Calculate position allocations based on SMA50/250 crossover signals.
+        Calculate position allocations based on configurable SMA crossover signals.
         
         Args:
-            data (pd.DataFrame): Filtered market data with SMA_50 and SMA_250 columns
+            data (pd.DataFrame): Filtered market data with SMA columns
             contextData (dict, optional): Additional context data (unused in this strategy)
             
         Returns:
             pd.DataFrame: DataFrame with TQQQ/SQQQ position allocations
         """
+        # Validate that required SMA columns exist
+        if self.fast_sma_column not in data.columns:
+            raise ValueError(f"Required column '{self.fast_sma_column}' not found in data. Available columns: {list(data.columns)}")
+        if self.slow_sma_column not in data.columns:
+            raise ValueError(f"Required column '{self.slow_sma_column}' not found in data. Available columns: {list(data.columns)}")
+        
         # Create result DataFrame
         result_df = pd.DataFrame(index=data.index)
         result_df.index.name = 'date'
@@ -50,23 +84,23 @@ class SMA50250Strategy(BaseStrategy):
         
         # Check for missing SMA data and calculate positions
         for idx, row in data.iterrows():
-            sma_50 = row['SMA_50']
-            sma_250 = row['SMA_250']
+            fast_sma = row[self.fast_sma_column]
+            slow_sma = row[self.slow_sma_column]
             
             # Handle missing SMA data
-            if pd.isna(sma_50) or pd.isna(sma_250):
+            if pd.isna(fast_sma) or pd.isna(slow_sma):
                 result_df.loc[idx, 'longPositionPct'] = None
                 result_df.loc[idx, 'shortPositionPct'] = None
                 result_df.loc[idx, 'error'] = "missing historical data"
                 continue
             
             # Apply SMA crossover logic
-            if sma_50 > sma_250:
-                # Golden Cross: SMA50 above SMA250 -> Bullish -> 100% TQQQ
+            if fast_sma > slow_sma:
+                # Golden Cross: Fast SMA above Slow SMA -> Bullish -> 100% TQQQ
                 result_df.loc[idx, 'longPositionPct'] = 1.0   # 100% TQQQ
                 result_df.loc[idx, 'shortPositionPct'] = 0.0  # 0% SQQQ
             else:
-                # Death Cross: SMA50 below SMA250 -> Bearish -> 100% SQQQ  
+                # Death Cross: Fast SMA below Slow SMA -> Bearish -> 100% SQQQ  
                 result_df.loc[idx, 'longPositionPct'] = 0.0   # 0% TQQQ
                 result_df.loc[idx, 'shortPositionPct'] = 1.0  # 100% SQQQ
         
@@ -102,13 +136,15 @@ class SMA50250Strategy(BaseStrategy):
         
         # Create analysis DataFrame
         analysis_df = pd.DataFrame(index=filtered_data.index)
-        analysis_df['SMA_50'] = filtered_data['SMA_50']
-        analysis_df['SMA_250'] = filtered_data['SMA_250']
+        analysis_df[f'SMA_{self.fast_sma_period}'] = filtered_data[self.fast_sma_column]
+        analysis_df[f'SMA_{self.slow_sma_period}'] = filtered_data[self.slow_sma_column]
         analysis_df['Price'] = filtered_data['Price']
         
         # Calculate crossover signals
-        analysis_df['SMA50_above_SMA250'] = analysis_df['SMA_50'] > analysis_df['SMA_250']
-        analysis_df['Signal_Change'] = analysis_df['SMA50_above_SMA250'].diff()
+        analysis_df[f'SMA{self.fast_sma_period}_above_SMA{self.slow_sma_period}'] = (
+            analysis_df[f'SMA_{self.fast_sma_period}'] > analysis_df[f'SMA_{self.slow_sma_period}']
+        )
+        analysis_df['Signal_Change'] = analysis_df[f'SMA{self.fast_sma_period}_above_SMA{self.slow_sma_period}'].diff()
         
         # Mark crossover points
         analysis_df['Golden_Cross'] = analysis_df['Signal_Change'] == True   # False to True

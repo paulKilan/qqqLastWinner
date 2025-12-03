@@ -37,7 +37,7 @@ def _load_prices(path: str) -> pd.DataFrame:
 def main():
     # === user-configurable bits ===
     strategy_module = "strategy.sma_strategy"
-    start_date = "2011-01-01"
+    start_date = "2022-01-01"
     end_date   = "2025-09-30"
     initial_capital = 10_000
     trade_price = "open"                 # day t + 1 "open" or "close" (open price by default)
@@ -47,7 +47,7 @@ def main():
 
     # load strategy
     strat_mod = importlib.import_module(strategy_module)
-    Strategy = getattr(strat_mod, "SMA50250Strategy")
+    Strategy = getattr(strat_mod, "SMAStrategy")
     strategy = Strategy()
 
     # load ETF data
@@ -79,7 +79,7 @@ def main():
 
     trades.to_csv(trades_path, index=False)
 
-    print("✅Backtest complete")
+    print("Backtest complete")
     print(f"Trades : {trades_path}")
     if not trades.empty:
         print(f"Total trades: {len(trades)}")
