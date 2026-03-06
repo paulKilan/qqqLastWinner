@@ -1,3 +1,12 @@
+'''
+Backtest Results:
+- Start Date: 2013-01-02
+- End Date: 2024-12-31
+- Initial Capital: $10,000.00
+- Final Equity: $1,414.31
+- Total Trades: 45
+- Return: -85.86%
+'''
 """
 SMA Crossover Trading Strategy
 

@@ -20,11 +20,19 @@ class BaseStrategy:
     the output will clearly mention it with "ERROR".
     """
     
-    def __init__(self):
-        """Initialize the BaseStrategy with default data path."""
+    def __init__(self, allow_short: bool = True, use_regime_filter: bool = False):
+        """
+        Initialize the BaseStrategy.
+        
+        Args:
+            allow_short (bool): If False, short signals will be converted to Cash (0.0).
+            use_regime_filter (bool): If True, only allow Long trades when Price > SMA 200.
+        """
         self.data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
         self.data_file = 'QQQ_with_SMAs.csv'  # Default file, can be overridden by derived classes
         self._data = None
+        self.allow_short = allow_short
+        self.use_regime_filter = use_regime_filter
         
     def execute(self, startDate: str, endDate: str, contextData: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """
@@ -58,6 +66,17 @@ class BaseStrategy:
             start_dt, end_dt = self._validate_and_parse_dates(startDate, endDate)
             
             # Filter data for the date range
+            # Note: We need enough history for indicators (like SMA 200) even if start_date is recent.
+            # However, _filter_data_by_date_range cuts the data.
+            # The derived classes usually calculate indicators on the filtered data, which is a problem for early dates.
+            # But for now, we assume the user provides a start_date that allows for warmup if they handle it,
+            # OR we calculate indicators on the full dataset before filtering.
+            # BaseStrategy structure calls _calculate_positions on filtered data.
+            # To support regime filter (SMA 200), we need 200 days prior.
+            
+            # For this implementation, we will calculate regime filter on the filtered data
+            # which means the first 200 days of the backtest might have no regime filter value (NaN).
+            
             filtered_data = self._filter_data_by_date_range(start_dt, end_dt)
             
             if filtered_data.empty:
@@ -69,6 +88,30 @@ class BaseStrategy:
             
             # Calculate positions (to be overridden by derived classes)
             result_df = self._calculate_positions(filtered_data, contextData)
+            
+            # --- Apply Improvements ---
+            
+            # 1. Regime Filter (SMA 200)
+            if self.use_regime_filter:
+                # Calculate SMA 200 on the close price
+                # Note: This is calculated on the 'filtered_data' passed to _calculate_positions.
+                # If the strategy calculated indicators, they are in result_df? No, result_df is just positions.
+                # We need to calculate SMA 200 on filtered_data.
+                sma_200 = filtered_data['close'].rolling(window=200).mean()
+                
+                # Condition: Price > SMA 200 -> Bullish Regime
+                is_bullish = filtered_data['close'] > sma_200
+                
+                # Apply filter: If NOT bullish, force Long to 0.0
+                # We align indices just in case
+                result_df.loc[~is_bullish, 'longPositionPct'] = 0.0
+                
+                # Optional: Could also force Short to 0.0 if we only want to short in downtrends?
+                # Usually regime filter is "Long only in uptrend".
+            
+            # 2. Long-Only Mode
+            if not self.allow_short:
+                result_df['shortPositionPct'] = 0.0
             
             return result_df
             
@@ -105,6 +148,17 @@ class BaseStrategy:
             # Set Date as index and sort
             self._data.set_index('Date', inplace=True)
             self._data.sort_index(inplace=True)
+
+            # Normalize columns: 'Price' -> 'close', 'Open' -> 'open'
+            if 'Price' in self._data.columns:
+                self._data.rename(columns={'Price': 'close'}, inplace=True)
+            if 'Open' in self._data.columns:
+                self._data.rename(columns={'Open': 'open'}, inplace=True)
+            
+            # Ensure open and close are numeric (handle commas if present)
+            for col in ['open', 'close']:
+                if col in self._data.columns and self._data[col].dtype == 'object':
+                    self._data[col] = pd.to_numeric(self._data[col].astype(str).str.replace(',', ''), errors='coerce')
             
         except Exception as e:
             raise Exception(f"Unable to read QQQ data: {str(e)}")
@@ -209,6 +263,37 @@ class BaseStrategy:
         # Reset index to make date a column, then set it back as index
         result_df = result_df.reset_index()
         result_df.set_index('date', inplace=True)
+        
+        return result_df
+    
+    def apply_signals(self, result_df: pd.DataFrame, signals: pd.Series) -> pd.DataFrame:
+        """
+        Apply trading signals to the result DataFrame.
+        
+        Args:
+            result_df (pd.DataFrame): The DataFrame to update (must have 'longPositionPct' and 'shortPositionPct')
+            signals (pd.Series): Series of signals:
+                1  -> Long (100% TQQQ)
+                -1 -> Short (100% SQQQ)
+                0  -> Neutral (100% Cash)
+                
+        Returns:
+            pd.DataFrame: Updated result_df
+        """
+        # Ensure signals align with result_df
+        aligned_signals = signals.reindex(result_df.index).fillna(0)
+        
+        # Long: Signal == 1
+        result_df.loc[aligned_signals == 1, 'longPositionPct'] = 1.0
+        result_df.loc[aligned_signals == 1, 'shortPositionPct'] = 0.0
+        
+        # Short: Signal == -1
+        result_df.loc[aligned_signals == -1, 'longPositionPct'] = 0.0
+        result_df.loc[aligned_signals == -1, 'shortPositionPct'] = 1.0
+        
+        # Neutral: Signal == 0
+        result_df.loc[aligned_signals == 0, 'longPositionPct'] = 0.0
+        result_df.loc[aligned_signals == 0, 'shortPositionPct'] = 0.0
         
         return result_df
     

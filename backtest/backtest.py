@@ -1,10 +1,11 @@
 import pandas as pd
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Literal, Dict, Tuple
 
 PriceField = Literal["open", "close"]
 Rounding = Literal["floor", "nearest", "fractional"]
+LeverageMode = Literal["3x", "1x"]
 
 # -------------------------
 # Configuration
@@ -17,6 +18,7 @@ class BacktestConfig:
     initial_capital: float = 10_000.0
     trade_price: PriceField = "open"          # Execute at t+1 open or close
     share_rounding: Rounding = "floor"        # How to round share quantities
+    leverage_mode: LeverageMode = "3x"        # "3x" = TQQQ/SQQQ, "1x" = QQQ long/short
 
 # -------------------------
 # Helper Functions
@@ -52,6 +54,8 @@ def normalize_strategy_output(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series
     
     Input: DataFrame with 'date', 'longPositionPct', 'shortPositionPct', 'error'
     Output: (positions_df, errors_series)
+    
+    Uses generic column names w_long / w_short so the engine is instrument-agnostic.
     """
     out = df.copy()
     
@@ -72,10 +76,10 @@ def normalize_strategy_output(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series
     out["longPositionPct"] = pd.to_numeric(out["longPositionPct"], errors="coerce").clip(0.0, 1.0)
     out["shortPositionPct"] = pd.to_numeric(out["shortPositionPct"], errors="coerce").clip(0.0, 1.0)
     
-    # Create positions DataFrame
+    # Create positions DataFrame — instrument-agnostic names
     positions = pd.DataFrame({
-        "w_tqqq": out["longPositionPct"],
-        "w_sqqq": out["shortPositionPct"]
+        "w_long": out["longPositionPct"],
+        "w_short": out["shortPositionPct"]
     }, index=out.index)
     
     errors = out[err_col] if err_col else pd.Series(index=out.index, dtype="object")
@@ -86,8 +90,8 @@ def normalize_strategy_output(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series
 # -------------------------
 def align_data_and_shift_positions(
     positions: pd.DataFrame,
-    tqqq_prices: pd.DataFrame,
-    sqqq_prices: pd.DataFrame,
+    long_prices: pd.DataFrame,
+    short_prices: pd.DataFrame,
     cfg: BacktestConfig
 ) -> Tuple[pd.DatetimeIndex, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
@@ -95,21 +99,24 @@ def align_data_and_shift_positions(
     
     This implements the core requirement: decisions made on day t are executed
     at the next trading day's open/close (t+1).
+    
+    In 3x mode: long_prices = TQQQ, short_prices = SQQQ
+    In 1x mode: long_prices = QQQ,  short_prices = QQQ  (short-sell mechanics)
     """
     # Prepare price data
-    tqqq = _prepare_price_data(tqqq_prices)
-    sqqq = _prepare_price_data(sqqq_prices)
+    long_px = _prepare_price_data(long_prices)
+    short_px = _prepare_price_data(short_prices)
     
     # Define date range
     start, end = pd.to_datetime(cfg.start_date), pd.to_datetime(cfg.end_date)
     
-    # Get common trading days for both ETFs
-    etf_calendar = tqqq.index.intersection(sqqq.index)
+    # Get common trading days for both instruments
+    etf_calendar = long_px.index.intersection(short_px.index)
     etf_calendar = etf_calendar[(etf_calendar >= start) & (etf_calendar <= end)]
     
     # Filter price data to trading calendar
-    tqqq = tqqq.loc[etf_calendar]
-    sqqq = sqqq.loc[etf_calendar]
+    long_px = long_px.loc[etf_calendar]
+    short_px = short_px.loc[etf_calendar]
     
     # Align positions to ETF calendar (forward-fill to persist last target)
     aligned_positions = positions.reindex(etf_calendar).ffill().fillna(0.0)
@@ -120,14 +127,14 @@ def align_data_and_shift_positions(
     
     # Filter to execution dates
     shifted_positions = shifted_positions.loc[execution_dates]
-    tqqq = tqqq.loc[execution_dates]
-    sqqq = sqqq.loc[execution_dates]
+    long_px = long_px.loc[execution_dates]
+    short_px = short_px.loc[execution_dates]
     
     # Ensure position weights are valid
-    shifted_positions["w_tqqq"] = shifted_positions["w_tqqq"].clip(0.0, 1.0)
-    shifted_positions["w_sqqq"] = shifted_positions["w_sqqq"].clip(0.0, 1.0)
+    shifted_positions["w_long"] = shifted_positions["w_long"].clip(0.0, 1.0)
+    shifted_positions["w_short"] = shifted_positions["w_short"].clip(0.0, 1.0)
     
-    return execution_dates, shifted_positions, tqqq, sqqq
+    return execution_dates, shifted_positions, long_px, short_px
 
 # -------------------------
 # Core Backtesting Engine
@@ -142,11 +149,21 @@ def run_backtest_with_strategy(
     """
     Run backtest with the given strategy.
     
+    Supports two leverage modes via cfg.leverage_mode:
+      - "3x": Buys TQQQ for long, SQQQ for short (default, legacy behaviour)
+      - "1x": Buys QQQ for long, short-sells QQQ for short
+    
+    For 1x mode, pass QQQ prices as *both* tqqq_prices and sqqq_prices.
+    
     Returns:
         trades_df: Complete trade log with entry/exit details
         equity_df: Daily equity curve
         issues_df: Strategy errors and warnings
     """
+    is_1x = cfg.leverage_mode == "1x"
+    long_sym = "QQQ" if is_1x else "TQQQ"
+    short_sym = "QQQ_SHORT" if is_1x else "SQQQ"
+
     # 1. Get strategy signals
     strategy_output = strategy.execute(
         startDate=cfg.start_date, 
@@ -156,7 +173,7 @@ def run_backtest_with_strategy(
     positions, errors = normalize_strategy_output(strategy_output)
     
     # 2. Align data and shift for t+1 execution
-    exec_dates, positions, tqqq, sqqq = align_data_and_shift_positions(
+    exec_dates, positions, long_px, short_px = align_data_and_shift_positions(
         positions, tqqq_prices, sqqq_prices, cfg
     )
     
@@ -166,128 +183,267 @@ def run_backtest_with_strategy(
     
     # 4. Initialize backtest state
     cash = float(cfg.initial_capital)
-    shares = {"TQQQ": 0.0, "SQQQ": 0.0}
-    open_trades = {"TQQQ": None, "SQQQ": None}
+    shares = {long_sym: 0.0, short_sym: 0.0}
+    open_trades = {long_sym: None, short_sym: None}
     trade_log = []
     equity_log = []
     
     def calculate_equity(date: pd.Timestamp) -> float:
         """Calculate total portfolio equity at close prices."""
-        return (cash + 
-                shares["TQQQ"] * float(tqqq.loc[date, "close"]) + 
-                shares["SQQQ"] * float(sqqq.loc[date, "close"]))
+        eq = cash
+        # Long position: value = shares * price
+        eq += shares[long_sym] * float(long_px.loc[date, "close"])
+        if is_1x:
+            # Short position: value = short_proceeds - shares * current_price
+            # shares[short_sym] stores the number of shares sold short.
+            # open_trades[short_sym]["short_proceeds"] stores cash received at entry.
+            if shares[short_sym] > 0 and open_trades[short_sym] is not None:
+                short_value = (open_trades[short_sym]["short_proceeds"]
+                               - shares[short_sym] * float(short_px.loc[date, "close"]))
+                eq += short_value
+        else:
+            # 3x mode: SQQQ is a normal long position
+            eq += shares[short_sym] * float(short_px.loc[date, "close"])
+        return eq
     
     # 5. Execute trades only on signal changes
-    prev_w_tqqq = None
-    prev_w_sqqq = None
+    prev_w_long = None
+    prev_w_short = None
     
     for date in exec_dates:
         # Get target allocations and prices
-        w_tqqq = float(positions.loc[date, "w_tqqq"])
-        w_sqqq = float(positions.loc[date, "w_sqqq"])
-        tqqq_price = float(tqqq.loc[date, cfg.trade_price])
-        sqqq_price = float(sqqq.loc[date, cfg.trade_price])
+        w_long = float(positions.loc[date, "w_long"])
+        w_short = float(positions.loc[date, "w_short"])
+        long_price = float(long_px.loc[date, cfg.trade_price])
+        short_price = float(short_px.loc[date, cfg.trade_price])
         
         # Only trade if signal has changed
-        if prev_w_tqqq is not None and (w_tqqq == prev_w_tqqq and w_sqqq == prev_w_sqqq):
+        if prev_w_long is not None and (w_long == prev_w_long and w_short == prev_w_short):
             # No signal change, just record equity
             equity_log.append({
                 "Date": date,
                 "Equity": calculate_equity(date),
                 "Cash": cash,
-                "TQQQ_Shares": shares["TQQQ"],
-                "SQQQ_Shares": shares["SQQQ"]
+                f"{long_sym}_Shares": shares[long_sym],
+                f"{short_sym}_Shares": shares[short_sym]
             })
             continue
         
         # Signal has changed - execute trades
-        # First, sell all current positions
-        for symbol, price_df in [("TQQQ", tqqq), ("SQQQ", sqqq)]:
-            if shares[symbol] > 0:
-                sell_price = float(price_df.loc[date, cfg.trade_price])
-                sell_value = shares[symbol] * sell_price
-                cash += sell_value
+        # First, close all current positions
+        # --- Close long position ---
+        if shares[long_sym] > 0:
+            sell_price = float(long_px.loc[date, cfg.trade_price])
+            sell_value = shares[long_sym] * sell_price
+            cash += sell_value
+            
+            if open_trades[long_sym] is not None:
+                trade = open_trades[long_sym]
+                profit = (sell_price - trade["entry_price"]) * trade["shares"]
+                profit_pct = profit / (trade["entry_price"] * trade["shares"])
                 
-                # Log the sale if it closes a position
-                if open_trades[symbol] is not None:
-                    trade = open_trades[symbol]
-                    profit = (sell_price - trade["entry_price"]) * trade["shares"]
-                    profit_pct = profit / (trade["entry_price"] * trade["shares"])
+                trade_log.append({
+                    "Symbol": long_sym,
+                    "Direction": "LONG",
+                    "StartDate": trade["entry_date"],
+                    "EndDate": date,
+                    "Duration": (exec_dates.get_loc(date) - exec_dates.get_loc(trade["entry_date"])),
+                    "BuyPrice": round(trade["entry_price"], 6),
+                    "SellPrice": round(sell_price, 6),
+                    "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
+                    "Profit": round(profit, 6),
+                    "ProfitPercent": round(profit_pct, 6),
+                    "isProfitable": profit > 0,
+                    "isShortSale": False
+                })
+                open_trades[long_sym] = None
+            shares[long_sym] = 0.0
+
+        # --- Close short position ---
+        if shares[short_sym] > 0:
+            cover_price = float(short_px.loc[date, cfg.trade_price])
+            if is_1x:
+                # Cover short: buy back shares, profit = proceeds - cover_cost
+                cover_cost = shares[short_sym] * cover_price
+                if open_trades[short_sym] is not None:
+                    trade = open_trades[short_sym]
+                    profit = trade["short_proceeds"] - cover_cost
+                    profit_pct = profit / trade["short_proceeds"]
+                    # Cash increases by the profit (proceeds were already accounted)
+                    # At entry we had: cash += short_proceeds (selling shares)
+                    # At exit we spend: cash -= cover_cost
+                    # Net P&L = short_proceeds - cover_cost = profit
+                    cash += trade["short_proceeds"]  # return the proceeds
+                    cash -= cover_cost               # pay to buy back shares
                     
                     trade_log.append({
-                        "Symbol": symbol,
+                        "Symbol": "QQQ",
+                        "Direction": "SHORT",
                         "StartDate": trade["entry_date"],
                         "EndDate": date,
                         "Duration": (exec_dates.get_loc(date) - exec_dates.get_loc(trade["entry_date"])),
                         "BuyPrice": round(trade["entry_price"], 6),
-                        "SellPrice": round(sell_price, 6),
+                        "SellPrice": round(cover_price, 6),
+                        "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
+                        "Profit": round(profit, 6),
+                        "ProfitPercent": round(profit_pct, 6),
+                        "isProfitable": profit > 0,
+                        "isShortSale": True
+                    })
+                    open_trades[short_sym] = None
+            else:
+                # 3x mode: SQQQ is a normal long position, sell it
+                sell_value = shares[short_sym] * cover_price
+                cash += sell_value
+                if open_trades[short_sym] is not None:
+                    trade = open_trades[short_sym]
+                    profit = (cover_price - trade["entry_price"]) * trade["shares"]
+                    profit_pct = profit / (trade["entry_price"] * trade["shares"])
+                    
+                    trade_log.append({
+                        "Symbol": short_sym,
+                        "Direction": "LONG",
+                        "StartDate": trade["entry_date"],
+                        "EndDate": date,
+                        "Duration": (exec_dates.get_loc(date) - exec_dates.get_loc(trade["entry_date"])),
+                        "BuyPrice": round(trade["entry_price"], 6),
+                        "SellPrice": round(cover_price, 6),
                         "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
                         "Profit": round(profit, 6),
                         "ProfitPercent": round(profit_pct, 6),
                         "isProfitable": profit > 0,
                         "isShortSale": False
                     })
-                    open_trades[symbol] = None
-                
-                shares[symbol] = 0.0
+                    open_trades[short_sym] = None
+            shares[short_sym] = 0.0
         
-        # Now buy new positions based on target allocation
+        # Now open new positions based on target allocation
         current_equity = calculate_equity(date)
-        target_tqqq_value = w_tqqq * current_equity
-        target_sqqq_value = w_sqqq * current_equity
         
-        # Calculate target share quantities
-        target_tqqq_shares = _round_shares(target_tqqq_value / max(tqqq_price, 1e-9), cfg.share_rounding)
-        target_sqqq_shares = _round_shares(target_sqqq_value / max(sqqq_price, 1e-9), cfg.share_rounding)
+        # --- Open long position ---
+        target_long_value = w_long * current_equity
+        target_long_shares = _round_shares(target_long_value / max(long_price, 1e-9), cfg.share_rounding)
         
-        # Execute new trades
-        for symbol, target_shares, price in [("TQQQ", target_tqqq_shares, tqqq_price), 
-                                           ("SQQQ", target_sqqq_shares, sqqq_price)]:
-            if target_shares > 0:
-                trade_value = price * target_shares
-                
-                # Check if we have enough cash for the trade
+        if target_long_shares > 0:
+            trade_value = long_price * target_long_shares
+            if trade_value <= cash:
+                cash -= trade_value
+                shares[long_sym] = target_long_shares
+                open_trades[long_sym] = {
+                    "symbol": long_sym,
+                    "entry_date": date,
+                    "entry_price": long_price,
+                    "shares": target_long_shares
+                }
+        
+        # --- Open short position ---
+        target_short_value = w_short * current_equity
+        target_short_shares = _round_shares(target_short_value / max(short_price, 1e-9), cfg.share_rounding)
+        
+        if target_short_shares > 0:
+            if is_1x:
+                # Short-sell: we sell shares we don't own, receiving cash as proceeds.
+                # We hold the proceeds separately and must buy back later.
+                short_proceeds = short_price * target_short_shares
+                # Don't add proceeds to cash yet — track them in the trade record.
+                # Equity = cash + short_proceeds - current_short_value
+                shares[short_sym] = target_short_shares
+                open_trades[short_sym] = {
+                    "symbol": short_sym,
+                    "entry_date": date,
+                    "entry_price": short_price,
+                    "shares": target_short_shares,
+                    "short_proceeds": short_proceeds  # value received from selling short
+                }
+            else:
+                # 3x mode: buy SQQQ
+                trade_value = short_price * target_short_shares
                 if trade_value <= cash:
                     cash -= trade_value
-                    shares[symbol] = target_shares
-                    
-                    # Track new position
-                    open_trades[symbol] = {
-                        "symbol": symbol,
+                    shares[short_sym] = target_short_shares
+                    open_trades[short_sym] = {
+                        "symbol": short_sym,
                         "entry_date": date,
-                        "entry_price": price,
-                        "shares": target_shares
+                        "entry_price": short_price,
+                        "shares": target_short_shares
                     }
         
         # Update previous positions for next iteration
-        prev_w_tqqq = w_tqqq
-        prev_w_sqqq = w_sqqq
+        prev_w_long = w_long
+        prev_w_short = w_short
         
         # Record daily equity
         equity_log.append({
             "Date": date,
             "Equity": calculate_equity(date),
             "Cash": cash,
-            "TQQQ_Shares": shares["TQQQ"],
-            "SQQQ_Shares": shares["SQQQ"]
+            f"{long_sym}_Shares": shares[long_sym],
+            f"{short_sym}_Shares": shares[short_sym]
         })
     
     # 6. Force-close remaining positions on final day
     final_date = exec_dates[-1]
-    for symbol, price_df in [("TQQQ", tqqq), ("SQQQ", sqqq)]:
-        if shares[symbol] != 0:
-            final_price = float(price_df.loc[final_date, cfg.trade_price])
-            final_value = final_price * shares[symbol]
+    
+    # Close long
+    if shares[long_sym] > 0:
+        final_price = float(long_px.loc[final_date, cfg.trade_price])
+        final_value = final_price * shares[long_sym]
+        cash += final_value
+        if open_trades[long_sym] is not None:
+            trade = open_trades[long_sym]
+            profit = (final_price - trade["entry_price"]) * trade["shares"]
+            profit_pct = profit / (trade["entry_price"] * trade["shares"])
+            trade_log.append({
+                "Symbol": long_sym,
+                "Direction": "LONG",
+                "StartDate": trade["entry_date"],
+                "EndDate": final_date,
+                "Duration": (exec_dates.get_loc(final_date) - exec_dates.get_loc(trade["entry_date"])),
+                "BuyPrice": round(trade["entry_price"], 6),
+                "SellPrice": round(final_price, 6),
+                "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
+                "Profit": round(profit, 6),
+                "ProfitPercent": round(profit_pct, 6),
+                "isProfitable": profit > 0,
+                "isShortSale": False
+            })
+        shares[long_sym] = 0.0
+    
+    # Close short
+    if shares[short_sym] > 0:
+        final_price = float(short_px.loc[final_date, cfg.trade_price])
+        if is_1x:
+            if open_trades[short_sym] is not None:
+                trade = open_trades[short_sym]
+                cover_cost = shares[short_sym] * final_price
+                profit = trade["short_proceeds"] - cover_cost
+                profit_pct = profit / trade["short_proceeds"]
+                cash += trade["short_proceeds"]
+                cash -= cover_cost
+                trade_log.append({
+                    "Symbol": "QQQ",
+                    "Direction": "SHORT",
+                    "StartDate": trade["entry_date"],
+                    "EndDate": final_date,
+                    "Duration": (exec_dates.get_loc(final_date) - exec_dates.get_loc(trade["entry_date"])),
+                    "BuyPrice": round(trade["entry_price"], 6),
+                    "SellPrice": round(final_price, 6),
+                    "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
+                    "Profit": round(profit, 6),
+                    "ProfitPercent": round(profit_pct, 6),
+                    "isProfitable": profit > 0,
+                    "isShortSale": True
+                })
+        else:
+            final_value = final_price * shares[short_sym]
             cash += final_value
-            
-            # Log the final trade
-            if open_trades[symbol] is not None:
-                trade = open_trades[symbol]
+            if open_trades[short_sym] is not None:
+                trade = open_trades[short_sym]
                 profit = (final_price - trade["entry_price"]) * trade["shares"]
                 profit_pct = profit / (trade["entry_price"] * trade["shares"])
-                
                 trade_log.append({
-                    "Symbol": symbol,
+                    "Symbol": short_sym,
+                    "Direction": "LONG",
                     "StartDate": trade["entry_date"],
                     "EndDate": final_date,
                     "Duration": (exec_dates.get_loc(final_date) - exec_dates.get_loc(trade["entry_date"])),
@@ -299,8 +455,7 @@ def run_backtest_with_strategy(
                     "isProfitable": profit > 0,
                     "isShortSale": False
                 })
-            
-            shares[symbol] = 0.0
+        shares[short_sym] = 0.0
     
     # 7. Create output DataFrames
     trades_df = pd.DataFrame(trade_log)
