@@ -13,46 +13,18 @@ import numpy as np
 
 class StochasticStrategy(BaseStrategy):
     def __init__(self):
-        super().__init__(allow_short=True, use_regime_filter=True)
-        self.data_file = 'QQQ.csv'
+        super().__init__(allow_short=True)
 
     def _calculate_positions(self, data: pd.DataFrame, contextData=None) -> pd.DataFrame:
-        # Calculate Stochastic Oscillator
-        # %K = (Current Close - Lowest Low) / (Highest High - Lowest Low) * 100
-        # %D = 3-day SMA of %K
-        
-        window = 14
-        data['L14'] = data['close'].rolling(window=window).min()
-        data['H14'] = data['close'].rolling(window=window).max()
-        
-        data['%K'] = 100 * ((data['close'] - data['L14']) / (data['H14'] - data['L14']))
-        data['%D'] = data['%K'].rolling(window=3).mean()
+        # Stochastic %K = (Close - 14-day Low) / (14-day High - 14-day Low) * 100
+        low_14 = data['close'].rolling(window=14).min()
+        high_14 = data['close'].rolling(window=14).max()
+        pct_k = 100 * ((data['close'] - low_14) / (high_14 - low_14))
 
-        # Create result DataFrame
-        result_df = pd.DataFrame(index=data.index)
-        result_df.index.name = 'date'
-        
-        # Initialize columns
-        result_df['longPositionPct'] = 0.0
-        result_df['shortPositionPct'] = 0.0
-        result_df['error'] = None
+        result_df = self._make_result_df(data)
 
-        # Generate signals
-        # Oversold (<20) and %K crosses above %D -> Buy
-        # Overbought (>80) and %K crosses below %D -> Sell
-        
-        # We use simple thresholds for simplicity as requested "avoid complicated position"
-        # Buy when %K < 20
-        # Sell when %K > 80
-        
-        long_condition = data['%K'] < 20
-        short_condition = data['%K'] > 80
+        # %K < 20 -> Oversold -> Buy; %K > 80 -> Overbought -> Sell
+        result_df.loc[pct_k < 20, 'longPositionPct'] = 1.0
+        result_df.loc[pct_k > 80, 'shortPositionPct'] = 1.0
 
-        # Apply signals
-        result_df.loc[long_condition, 'longPositionPct'] = 1.0
-        result_df.loc[short_condition, 'shortPositionPct'] = 1.0
-        
-        result_df = result_df.reset_index()
-        result_df.set_index('date', inplace=True)
-
-        return result_df
+        return self._apply_regime_filter(data, result_df)

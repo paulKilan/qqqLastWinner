@@ -14,9 +14,10 @@ This avoids holding partial TQQQ + partial SQQQ simultaneously
 import pandas as pd
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
+from .base_strategy import BaseStrategy
 
 
-class EnsembleStrategy:
+class EnsembleStrategy(BaseStrategy):
     """
     Ensemble strategy that blends multiple sub-strategies with weights.
 
@@ -33,18 +34,18 @@ class EnsembleStrategy:
         long_threshold: float = 0.5,
         short_threshold: float = 0.5,
     ):
+        super().__init__(allow_short=True)
+
         if not strategies:
             raise ValueError("Must provide at least one (strategy, weight) pair")
 
-        self.strategies = strategies
-        self.long_threshold = long_threshold
-        self.short_threshold = short_threshold
-
-        # Normalize weights to sum to 1.0
-        total_weight = sum(w for _, w in self.strategies)
+        total_weight = sum(w for _, w in strategies)
         if total_weight <= 0:
             raise ValueError("Total weight must be positive")
-        self.strategies = [(s, w / total_weight) for s, w in self.strategies]
+
+        self.strategies = [(s, w / total_weight) for s, w in strategies]
+        self.long_threshold = long_threshold
+        self.short_threshold = short_threshold
 
     def execute(
         self,
@@ -54,6 +55,7 @@ class EnsembleStrategy:
     ) -> pd.DataFrame:
         """
         Run all sub-strategies, blend their signals, and apply thresholds.
+        Overrides BaseStrategy.execute() entirely — data loading is delegated to sub-strategies.
 
         Returns DataFrame with columns: longPositionPct, shortPositionPct, error
         """
@@ -109,17 +111,22 @@ class EnsembleStrategy:
             blended_short += short_s.reindex(common_index).ffill().fillna(0.0) * w
 
         # Apply thresholds to decide discrete positions
-        result_df = pd.DataFrame(index=common_index)
-        result_df.index.name = "date"
-        result_df["longPositionPct"] = 0.0
-        result_df["shortPositionPct"] = 0.0
-        result_df["error"] = None
-
-        # Long wins if it exceeds threshold (and is stronger than short)
         long_mask = (blended_long >= self.long_threshold) & (blended_long >= blended_short)
         short_mask = (blended_short >= self.short_threshold) & (blended_short > blended_long)
 
+        result_df = pd.DataFrame(
+            {'longPositionPct': 0.0, 'shortPositionPct': 0.0, 'error': None},
+            index=common_index,
+        )
+        result_df.index.name = "date"
         result_df.loc[long_mask, "longPositionPct"] = 1.0
         result_df.loc[short_mask, "shortPositionPct"] = 1.0
 
         return result_df
+
+    def _calculate_positions(self, data, contextData=None):
+        # EnsembleStrategy overrides execute() directly and never uses this path.
+        raise NotImplementedError(
+            "EnsembleStrategy overrides execute() directly. "
+            "_calculate_positions is not used."
+        )

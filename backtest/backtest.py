@@ -31,6 +31,35 @@ def _round_shares(x: float, mode: Rounding) -> float:
         return float(np.round(x))
     return float(np.floor(max(x, 0.0)))  # Non-negative floor
 
+def _build_trade_record(
+    symbol: str,
+    direction: str,
+    is_short_sale: bool,
+    trade: dict,
+    exit_date: pd.Timestamp,
+    exit_price: float,
+    profit: float,
+    profit_pct: float,
+    exec_dates: pd.DatetimeIndex,
+    share_rounding: str,
+) -> dict:
+    """Build the standard trade log entry dict."""
+    return {
+        "Symbol": symbol,
+        "Direction": direction,
+        "StartDate": trade["entry_date"],
+        "EndDate": exit_date,
+        "Duration": exec_dates.get_loc(exit_date) - exec_dates.get_loc(trade["entry_date"]),
+        "BuyPrice": round(trade["entry_price"], 6),
+        "SellPrice": round(exit_price, 6),
+        "ShareSize": int(trade["shares"]) if share_rounding != "fractional" else trade["shares"],
+        "Profit": round(profit, 6),
+        "ProfitPercent": round(profit_pct, 6),
+        "isProfitable": profit > 0,
+        "isShortSale": is_short_sale,
+    }
+
+
 def _prepare_price_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     Prepare price data for backtesting.
@@ -242,20 +271,10 @@ def run_backtest_with_strategy(
                 profit = (sell_price - trade["entry_price"]) * trade["shares"]
                 profit_pct = profit / (trade["entry_price"] * trade["shares"])
                 
-                trade_log.append({
-                    "Symbol": long_sym,
-                    "Direction": "LONG",
-                    "StartDate": trade["entry_date"],
-                    "EndDate": date,
-                    "Duration": (exec_dates.get_loc(date) - exec_dates.get_loc(trade["entry_date"])),
-                    "BuyPrice": round(trade["entry_price"], 6),
-                    "SellPrice": round(sell_price, 6),
-                    "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
-                    "Profit": round(profit, 6),
-                    "ProfitPercent": round(profit_pct, 6),
-                    "isProfitable": profit > 0,
-                    "isShortSale": False
-                })
+                trade_log.append(_build_trade_record(
+                    long_sym, "LONG", False, trade, date, sell_price,
+                    profit, profit_pct, exec_dates, cfg.share_rounding
+                ))
                 open_trades[long_sym] = None
             shares[long_sym] = 0.0
 
@@ -276,20 +295,10 @@ def run_backtest_with_strategy(
                     cash += trade["short_proceeds"]  # return the proceeds
                     cash -= cover_cost               # pay to buy back shares
                     
-                    trade_log.append({
-                        "Symbol": "QQQ",
-                        "Direction": "SHORT",
-                        "StartDate": trade["entry_date"],
-                        "EndDate": date,
-                        "Duration": (exec_dates.get_loc(date) - exec_dates.get_loc(trade["entry_date"])),
-                        "BuyPrice": round(trade["entry_price"], 6),
-                        "SellPrice": round(cover_price, 6),
-                        "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
-                        "Profit": round(profit, 6),
-                        "ProfitPercent": round(profit_pct, 6),
-                        "isProfitable": profit > 0,
-                        "isShortSale": True
-                    })
+                    trade_log.append(_build_trade_record(
+                        "QQQ", "SHORT", True, trade, date, cover_price,
+                        profit, profit_pct, exec_dates, cfg.share_rounding
+                    ))
                     open_trades[short_sym] = None
             else:
                 # 3x mode: SQQQ is a normal long position, sell it
@@ -300,20 +309,10 @@ def run_backtest_with_strategy(
                     profit = (cover_price - trade["entry_price"]) * trade["shares"]
                     profit_pct = profit / (trade["entry_price"] * trade["shares"])
                     
-                    trade_log.append({
-                        "Symbol": short_sym,
-                        "Direction": "LONG",
-                        "StartDate": trade["entry_date"],
-                        "EndDate": date,
-                        "Duration": (exec_dates.get_loc(date) - exec_dates.get_loc(trade["entry_date"])),
-                        "BuyPrice": round(trade["entry_price"], 6),
-                        "SellPrice": round(cover_price, 6),
-                        "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
-                        "Profit": round(profit, 6),
-                        "ProfitPercent": round(profit_pct, 6),
-                        "isProfitable": profit > 0,
-                        "isShortSale": False
-                    })
+                    trade_log.append(_build_trade_record(
+                        short_sym, "LONG", False, trade, date, cover_price,
+                        profit, profit_pct, exec_dates, cfg.share_rounding
+                    ))
                     open_trades[short_sym] = None
             shares[short_sym] = 0.0
         
@@ -393,20 +392,10 @@ def run_backtest_with_strategy(
             trade = open_trades[long_sym]
             profit = (final_price - trade["entry_price"]) * trade["shares"]
             profit_pct = profit / (trade["entry_price"] * trade["shares"])
-            trade_log.append({
-                "Symbol": long_sym,
-                "Direction": "LONG",
-                "StartDate": trade["entry_date"],
-                "EndDate": final_date,
-                "Duration": (exec_dates.get_loc(final_date) - exec_dates.get_loc(trade["entry_date"])),
-                "BuyPrice": round(trade["entry_price"], 6),
-                "SellPrice": round(final_price, 6),
-                "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
-                "Profit": round(profit, 6),
-                "ProfitPercent": round(profit_pct, 6),
-                "isProfitable": profit > 0,
-                "isShortSale": False
-            })
+            trade_log.append(_build_trade_record(
+                long_sym, "LONG", False, trade, final_date, final_price,
+                profit, profit_pct, exec_dates, cfg.share_rounding
+            ))
         shares[long_sym] = 0.0
     
     # Close short
@@ -420,20 +409,10 @@ def run_backtest_with_strategy(
                 profit_pct = profit / trade["short_proceeds"]
                 cash += trade["short_proceeds"]
                 cash -= cover_cost
-                trade_log.append({
-                    "Symbol": "QQQ",
-                    "Direction": "SHORT",
-                    "StartDate": trade["entry_date"],
-                    "EndDate": final_date,
-                    "Duration": (exec_dates.get_loc(final_date) - exec_dates.get_loc(trade["entry_date"])),
-                    "BuyPrice": round(trade["entry_price"], 6),
-                    "SellPrice": round(final_price, 6),
-                    "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
-                    "Profit": round(profit, 6),
-                    "ProfitPercent": round(profit_pct, 6),
-                    "isProfitable": profit > 0,
-                    "isShortSale": True
-                })
+                trade_log.append(_build_trade_record(
+                    "QQQ", "SHORT", True, trade, final_date, final_price,
+                    profit, profit_pct, exec_dates, cfg.share_rounding
+                ))
         else:
             final_value = final_price * shares[short_sym]
             cash += final_value
@@ -441,20 +420,10 @@ def run_backtest_with_strategy(
                 trade = open_trades[short_sym]
                 profit = (final_price - trade["entry_price"]) * trade["shares"]
                 profit_pct = profit / (trade["entry_price"] * trade["shares"])
-                trade_log.append({
-                    "Symbol": short_sym,
-                    "Direction": "LONG",
-                    "StartDate": trade["entry_date"],
-                    "EndDate": final_date,
-                    "Duration": (exec_dates.get_loc(final_date) - exec_dates.get_loc(trade["entry_date"])),
-                    "BuyPrice": round(trade["entry_price"], 6),
-                    "SellPrice": round(final_price, 6),
-                    "ShareSize": int(trade["shares"]) if cfg.share_rounding != "fractional" else trade["shares"],
-                    "Profit": round(profit, 6),
-                    "ProfitPercent": round(profit_pct, 6),
-                    "isProfitable": profit > 0,
-                    "isShortSale": False
-                })
+                trade_log.append(_build_trade_record(
+                    short_sym, "LONG", False, trade, final_date, final_price,
+                    profit, profit_pct, exec_dates, cfg.share_rounding
+                ))
         shares[short_sym] = 0.0
     
     # 7. Create output DataFrames

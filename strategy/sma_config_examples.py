@@ -1,8 +1,8 @@
 """
 SMA Strategy Configuration Examples
 
-This file shows how to easily switch between different SMA periods
-by modifying the configuration at the top of sma_strategy.py
+This file documents common SMA period configurations.
+See sma_crossover_strategy.py for the implementation.
 """
 
 # =============================================================================
@@ -42,34 +42,23 @@ ULTRA_LONG_CONFIG = {
 # =============================================================================
 
 """
-To switch between configurations:
+To use a different SMA configuration:
 
-1. Open strategy/sma_strategy.py
-2. Find the CONFIGURATION section at the top (lines 13-22)
-3. Change these two lines:
+1. Open strategy/sma_crossover_strategy.py
+2. Change the rolling window values in _calculate_positions:
 
-   FAST_SMA_PERIOD = 50    # Change this number
-   SLOW_SMA_PERIOD = 250   # Change this number
-
-4. Make sure your QQQ_with_SMAs.csv has the corresponding SMA columns:
-   - For 20/60: needs SMA_20 and SMA_60 columns
-   - For 50/250: needs SMA_50 and SMA_250 columns
+   sma_50 = data['close'].rolling(window=50).mean()   # fast period
+   sma_200 = data['close'].rolling(window=200).mean() # slow period
 
 EXAMPLES:
 
 For 20/60 configuration:
-   FAST_SMA_PERIOD = 20
-   SLOW_SMA_PERIOD = 60
+   sma_fast = data['close'].rolling(window=20).mean()
+   sma_slow = data['close'].rolling(window=60).mean()
 
 For 10/30 configuration:
-   FAST_SMA_PERIOD = 10
-   SLOW_SMA_PERIOD = 30
-
-The strategy will automatically:
-- Update column names (SMA_20, SMA_60, etc.)
-- Update all logic and analysis functions
-- Print the current configuration when initialized
-- Validate that required columns exist in your data
+   sma_fast = data['close'].rolling(window=10).mean()
+   sma_slow = data['close'].rolling(window=30).mean()
 """
 
 # =============================================================================
@@ -113,4 +102,4 @@ if __name__ == "__main__":
         print(f"   Required columns: SMA_{config['FAST_SMA_PERIOD']}, SMA_{config['SLOW_SMA_PERIOD']}")
     
     print(f"\n{PERFORMANCE_NOTES}")
-    print("\nTo switch configurations, edit the CONFIGURATION section in strategy/sma_strategy.py")
+    print("\nTo switch configurations, edit the rolling window values in strategy/sma_crossover_strategy.py")

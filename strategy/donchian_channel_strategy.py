@@ -13,48 +13,17 @@ import numpy as np
 
 class DonchianChannelStrategy(BaseStrategy):
     def __init__(self):
-        super().__init__(allow_short=True, use_regime_filter=True)
-        self.data_file = 'QQQ.csv'
+        super().__init__(allow_short=True)
 
     def _calculate_positions(self, data: pd.DataFrame, contextData=None) -> pd.DataFrame:
-        # Calculate Donchian Channels (20-day)
-        window = 20
-        data['High_20'] = data['close'].rolling(window=window).max()
-        data['Low_20'] = data['close'].rolling(window=window).min()
-        
-        # Shift by 1 because we trade based on YESTERDAY's breakout
-        # Actually, if we use today's close to decide, we trade tomorrow.
-        # The backtester handles the shift.
-        # But for Donchian, usually:
-        # Buy if Price > High of previous 20 days.
-        # Sell if Price < Low of previous 20 days.
-        
-        # We need the high/low of the *previous* window days, excluding today.
-        # So we shift the rolling max/min by 1.
-        data['Donchian_High'] = data['close'].rolling(window=window).max().shift(1)
-        data['Donchian_Low'] = data['close'].rolling(window=window).min().shift(1)
+        # Donchian Channels: use previous 20-day high/low (shift(1) excludes today)
+        donchian_high = data['close'].rolling(window=20).max().shift(1)
+        donchian_low = data['close'].rolling(window=20).min().shift(1)
 
-        # Create result DataFrame
-        result_df = pd.DataFrame(index=data.index)
-        result_df.index.name = 'date'
-        
-        # Initialize columns
-        result_df['longPositionPct'] = 0.0
-        result_df['shortPositionPct'] = 0.0
-        result_df['error'] = None
+        result_df = self._make_result_df(data)
 
-        # Generate signals
-        # Breakout above upper channel -> Long
-        long_condition = data['close'] > data['Donchian_High']
-        
-        # Breakout below lower channel -> Short
-        short_condition = data['close'] < data['Donchian_Low']
+        # Breakout above upper channel -> Long; below lower channel -> Short
+        result_df.loc[data['close'] > donchian_high, 'longPositionPct'] = 1.0
+        result_df.loc[data['close'] < donchian_low, 'shortPositionPct'] = 1.0
 
-        # Apply signals
-        result_df.loc[long_condition, 'longPositionPct'] = 1.0
-        result_df.loc[short_condition, 'shortPositionPct'] = 1.0
-        
-        result_df = result_df.reset_index()
-        result_df.set_index('date', inplace=True)
-
-        return result_df
+        return self._apply_regime_filter(data, result_df)

@@ -13,37 +13,19 @@ import numpy as np
 
 class BollingerBandsStrategy(BaseStrategy):
     def __init__(self):
-        super().__init__(allow_short=True, use_regime_filter=True)
-        self.data_file = 'QQQ.csv'
+        super().__init__(allow_short=True)
 
     def _calculate_positions(self, data: pd.DataFrame, contextData=None) -> pd.DataFrame:
-        # Calculate Bollinger Bands
-        data['SMA_20'] = data['close'].rolling(window=20).mean()
-        data['STD_20'] = data['close'].rolling(window=20).std()
-        data['Upper'] = data['SMA_20'] + (data['STD_20'] * 2)
-        data['Lower'] = data['SMA_20'] - (data['STD_20'] * 2)
+        # Calculate Bollinger Bands (20-day, 2 std dev)
+        sma = data['close'].rolling(window=20).mean()
+        std = data['close'].rolling(window=20).std()
+        upper = sma + (std * 2)
+        lower = sma - (std * 2)
 
-        # Create result DataFrame
-        result_df = pd.DataFrame(index=data.index)
-        result_df.index.name = 'date'
-        
-        # Initialize columns
-        result_df['longPositionPct'] = 0.0
-        result_df['shortPositionPct'] = 0.0
-        result_df['error'] = None
+        result_df = self._make_result_df(data)
 
-        # Generate signals
-        # Price < Lower Band -> Buy (Long)
-        long_condition = data['close'] < data['Lower']
-        
-        # Price > Upper Band -> Sell (Short)
-        short_condition = data['close'] > data['Upper']
+        # Price < Lower Band -> Buy (Long); Price > Upper Band -> Sell (Short)
+        result_df.loc[data['close'] < lower, 'longPositionPct'] = 1.0
+        result_df.loc[data['close'] > upper, 'shortPositionPct'] = 1.0
 
-        # Apply signals
-        result_df.loc[long_condition, 'longPositionPct'] = 1.0
-        result_df.loc[short_condition, 'shortPositionPct'] = 1.0
-        
-        result_df = result_df.reset_index()
-        result_df.set_index('date', inplace=True)
-
-        return result_df
+        return self._apply_regime_filter(data, result_df)

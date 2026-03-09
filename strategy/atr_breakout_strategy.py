@@ -13,76 +13,27 @@ import numpy as np
 
 class AtrBreakoutStrategy(BaseStrategy):
     def __init__(self):
-        super().__init__(allow_short=True, use_regime_filter=True)
-        self.data_file = 'QQQ.csv'
+        super().__init__(allow_short=True)
 
     def _calculate_positions(self, data: pd.DataFrame, contextData=None) -> pd.DataFrame:
-        # Calculate ATR (Average True Range)
-        # TR = Max(High - Low, Abs(High - PrevClose), Abs(Low - PrevClose))
-        # Since we only have Open/Close in normalized data (unless BaseStrategy loads High/Low)
-        # BaseStrategy loads raw data, so we might have High/Low if we check self._data columns.
-        # But _calculate_positions receives 'data' which is filtered.
-        # Let's check if 'High' and 'Low' are preserved in filtered data.
-        
-        # BaseStrategy._filter_data_by_date_range returns a copy of self._data.
-        # self._data has all columns from CSV.
-        # So 'High' and 'Low' should be available.
-        # But we need to ensure they are numeric.
-        
-        # We need to handle potential string columns for High/Low if they weren't converted in BaseStrategy.
-        # BaseStrategy only converted 'open' and 'close'.
-        
-        # Let's try to convert High/Low here just in case.
-        for col in ['High', 'Low']:
-            if col in data.columns and data[col].dtype == 'object':
-                data[col] = pd.to_numeric(data[col].astype(str).str.replace(',', ''), errors='coerce')
-        
-        if 'High' not in data.columns or 'Low' not in data.columns:
-             # Fallback if High/Low missing: use High=Close, Low=Close (ATR will be small, strategy might fail)
-             data['High'] = data['close']
-             data['Low'] = data['close']
+        # ATR (Average True Range) using 'high'/'low' normalized by BaseStrategy._load_data()
+        high = data['high'] if 'high' in data.columns else data['close']
+        low = data['low'] if 'low' in data.columns else data['close']
+        prev_close = data['close'].shift(1)
 
-        high = data['High']
-        low = data['Low']
-        close = data['close']
-        prev_close = close.shift(1)
-        
-        tr1 = high - low
-        tr2 = (high - prev_close).abs()
-        tr3 = (low - prev_close).abs()
-        
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        data['ATR'] = tr.rolling(window=14).mean()
-        
-        # Strategy:
-        # Buy if Price > Close + k * ATR
-        # Sell if Price < Close - k * ATR
-        # Wait, this is usually "Breakout from open" or "Breakout from previous close".
-        # Let's use: Buy if Close > Previous Close + 1 * ATR
-        # Sell if Close < Previous Close - 1 * ATR
-        
-        k = 1.0
-        upper_band = prev_close + (k * data['ATR'])
-        lower_band = prev_close - (k * data['ATR'])
-        
-        # Create result DataFrame
-        result_df = pd.DataFrame(index=data.index)
-        result_df.index.name = 'date'
-        
-        # Initialize columns
-        result_df['longPositionPct'] = 0.0
-        result_df['shortPositionPct'] = 0.0
-        result_df['error'] = None
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(window=14).mean()
 
-        # Generate signals
-        long_condition = data['close'] > upper_band
-        short_condition = data['close'] < lower_band
+        # Buy if Close > PrevClose + 1*ATR; Sell if Close < PrevClose - 1*ATR
+        upper_band = prev_close + atr
+        lower_band = prev_close - atr
 
-        # Apply signals
-        result_df.loc[long_condition, 'longPositionPct'] = 1.0
-        result_df.loc[short_condition, 'shortPositionPct'] = 1.0
-        
-        result_df = result_df.reset_index()
-        result_df.set_index('date', inplace=True)
+        result_df = self._make_result_df(data)
+        result_df.loc[data['close'] > upper_band, 'longPositionPct'] = 1.0
+        result_df.loc[data['close'] < lower_band, 'shortPositionPct'] = 1.0
 
-        return result_df
+        return self._apply_regime_filter(data, result_df)

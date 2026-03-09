@@ -13,39 +13,22 @@ import numpy as np
 
 class RsiStrategy(BaseStrategy):
     def __init__(self):
-        super().__init__(allow_short=True, use_regime_filter=True)
-        self.data_file = 'QQQ.csv'
+        super().__init__(allow_short=True)
 
     def _calculate_positions(self, data: pd.DataFrame, contextData=None) -> pd.DataFrame:
         # Calculate RSI
         delta = data['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        
+
         rs = gain / loss
         data['RSI'] = 100 - (100 / (1 + rs))
 
-        # Create result DataFrame
-        result_df = pd.DataFrame(index=data.index)
-        result_df.index.name = 'date'
-        
-        # Initialize columns
-        result_df['longPositionPct'] = 0.0
-        result_df['shortPositionPct'] = 0.0
-        result_df['error'] = None
+        result_df = self._make_result_df(data)
 
-        # Generate signals
         # RSI < 30 -> Oversold -> Buy (Long)
-        long_condition = data['RSI'] < 30
-        
         # RSI > 70 -> Overbought -> Sell (Short)
-        short_condition = data['RSI'] > 70
+        result_df.loc[data['RSI'] < 30, 'longPositionPct'] = 1.0
+        result_df.loc[data['RSI'] > 70, 'shortPositionPct'] = 1.0
 
-        # Apply signals
-        result_df.loc[long_condition, 'longPositionPct'] = 1.0
-        result_df.loc[short_condition, 'shortPositionPct'] = 1.0
-        
-        result_df = result_df.reset_index()
-        result_df.set_index('date', inplace=True)
-
-        return result_df
+        return self._apply_regime_filter(data, result_df)

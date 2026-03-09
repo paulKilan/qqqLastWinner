@@ -22,76 +22,46 @@ class EnhancedSmaStrategy(BaseStrategy):
     """
     
     def __init__(self):
-        super().__init__(allow_short=True) # Explicitly enable shorting
-        self.data_file = 'QQQ.csv'
+        super().__init__(allow_short=True)
 
     def _calculate_positions(self, data: pd.DataFrame, contextData=None) -> pd.DataFrame:
-        # Calculate SMAs
-        data['SMA_50'] = data['close'].rolling(window=50).mean()
-        data['SMA_200'] = data['close'].rolling(window=200).mean()
-        
-        # Calculate ADX (Average Directional Index) for Neutral filter
-        # ADX requires High, Low, Close
-        # BaseStrategy loads raw data so High/Low should be there, but let's ensure numeric
-        for col in ['High', 'Low', 'close']:
-             if col in data.columns and data[col].dtype == 'object':
-                data[col] = pd.to_numeric(data[col].astype(str).str.replace(',', ''), errors='coerce')
-        
-        # Simple ADX calculation (14 period)
-        high = data['High']
-        low = data['Low']
+        sma_50 = data['close'].rolling(window=50).mean()
+        sma_200 = data['close'].rolling(window=200).mean()
+
+        # ADX (Average Directional Index) for trend-strength filter
+        # Uses 'high'/'low' normalized by BaseStrategy._load_data()
+        high = data['high'] if 'high' in data.columns else data['close']
+        low = data['low'] if 'low' in data.columns else data['close']
         close = data['close']
-        
-        plus_dm = high.diff()
-        minus_dm = low.diff()
-        plus_dm[plus_dm < 0] = 0
-        minus_dm[minus_dm > 0] = 0
-        
-        tr1 = pd.DataFrame(high - low)
-        tr2 = pd.DataFrame(abs(high - close.shift(1)))
-        tr3 = pd.DataFrame(abs(low - close.shift(1)))
-        frames = [tr1, tr2, tr3]
-        tr = pd.concat(frames, axis=1, join='outer').max(axis=1)
+
+        up_move = high.diff()
+        down_move = -low.diff()
+        plus_dm = pd.Series(
+            np.where((up_move > down_move) & (up_move > 0), up_move, 0.0),
+            index=data.index,
+        )
+        minus_dm = pd.Series(
+            np.where((down_move > up_move) & (down_move > 0), down_move, 0.0),
+            index=data.index,
+        )
+
+        tr = pd.concat([
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ], axis=1).max(axis=1)
         atr = tr.rolling(14).mean()
-        
+
         plus_di = 100 * (plus_dm.ewm(alpha=1/14).mean() / atr)
-        minus_di = 100 * (abs(minus_dm).ewm(alpha=1/14).mean() / atr)
+        minus_di = 100 * (minus_dm.ewm(alpha=1/14).mean() / atr)
         dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
         adx = dx.rolling(14).mean()
-        
-        data['ADX'] = adx
 
-        # Initialize signals with 0 (Neutral)
+        # Long: Golden Cross + strong trend; Short: Death Cross + strong trend; else Cash
+        strong_trend = adx > 20
         signals = pd.Series(0, index=data.index)
-        
-        # Define Conditions
-        bullish = data['SMA_50'] > data['SMA_200']
-        bearish = data['SMA_50'] < data['SMA_200']
-        strong_trend = data['ADX'] > 20
-        
-        # Apply Logic
-        # Long: Bullish AND Strong Trend
-        signals[bullish & strong_trend] = 1
-        
-        # Short: Bearish AND Strong Trend
-        signals[bearish & strong_trend] = -1
-        
-        # Neutral: Weak Trend (ADX <= 20) -> remains 0
-        # Also Bullish/Bearish but Weak Trend -> remains 0
-        
-        # Create result DataFrame
-        # Create result DataFrame
-        # We'll just use the standard init
-        result_df = pd.DataFrame(index=data.index)
-        result_df.index.name = 'date'
-        result_df['longPositionPct'] = 0.0
-        result_df['shortPositionPct'] = 0.0
-        result_df['error'] = None
-        
-        # Use new helper
-        result_df = self.apply_signals(result_df, signals)
-        
-        result_df = result_df.reset_index()
-        result_df.set_index('date', inplace=True)
+        signals[(sma_50 > sma_200) & strong_trend] = 1
+        signals[(sma_50 < sma_200) & strong_trend] = -1
 
-        return result_df
+        result_df = self._make_result_df(data)
+        return self.apply_signals(result_df, signals)

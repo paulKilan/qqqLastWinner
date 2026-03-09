@@ -14,38 +14,16 @@ import numpy as np
 class SmaCrossoverStrategy(BaseStrategy):
     def __init__(self):
         super().__init__()
-        self.data_file = 'QQQ.csv'  # Override to use raw QQQ data
 
     def _calculate_positions(self, data: pd.DataFrame, contextData=None) -> pd.DataFrame:
-        # Calculate indicators
-        data['SMA_50'] = data['close'].rolling(window=50).mean()
-        data['SMA_200'] = data['close'].rolling(window=200).mean()
+        sma_50 = data['close'].rolling(window=50).mean()
+        sma_200 = data['close'].rolling(window=200).mean()
 
-        # Create result DataFrame
-        result_df = pd.DataFrame(index=data.index)
-        result_df.index.name = 'date'
-        
-        # Initialize columns
-        result_df['longPositionPct'] = 0.0
-        result_df['shortPositionPct'] = 0.0
-        result_df['error'] = None
+        result_df = self._make_result_df(data)
 
-        # Generate signals
-        # Long when SMA 50 > SMA 200
-        long_condition = data['SMA_50'] > data['SMA_200']
-        
-        # Short when SMA 50 < SMA 200
-        short_condition = data['SMA_50'] < data['SMA_200']
-
-        # Apply signals
-        result_df.loc[long_condition, 'longPositionPct'] = 1.0
-        result_df.loc[short_condition, 'shortPositionPct'] = 1.0
-        
-        # Handle NaN at the beginning (due to rolling window)
-        # We can just leave them as 0.0 (Cash) or forward fill if we had a previous state.
-        # For simplicity, we stay in Cash until we have enough data.
-        
-        result_df = result_df.reset_index()
-        result_df.set_index('date', inplace=True)
+        # Long when SMA 50 > SMA 200; Short when SMA 50 < SMA 200
+        # NaN rows (first 200 days of warmup) stay at 0.0 (Cash)
+        result_df.loc[sma_50 > sma_200, 'longPositionPct'] = 1.0
+        result_df.loc[sma_50 < sma_200, 'shortPositionPct'] = 1.0
 
         return result_df
