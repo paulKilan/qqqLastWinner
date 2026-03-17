@@ -324,15 +324,18 @@ def run_backtest_with_strategy(
         target_long_shares = _round_shares(target_long_value / max(long_price, 1e-9), cfg.share_rounding)
         
         if target_long_shares > 0:
-            trade_value = long_price * target_long_shares
-            if trade_value <= cash:
+            # Cap to what cash can actually buy
+            affordable = cash / max(long_price, 1e-9)
+            actual_shares = _round_shares(min(target_long_shares, affordable), cfg.share_rounding)
+            if actual_shares > 0:
+                trade_value = long_price * actual_shares
                 cash -= trade_value
-                shares[long_sym] = target_long_shares
+                shares[long_sym] = actual_shares
                 open_trades[long_sym] = {
                     "symbol": long_sym,
                     "entry_date": date,
                     "entry_price": long_price,
-                    "shares": target_long_shares
+                    "shares": actual_shares
                 }
         
         # --- Open short position ---
@@ -355,16 +358,18 @@ def run_backtest_with_strategy(
                     "short_proceeds": short_proceeds  # value received from selling short
                 }
             else:
-                # 3x mode: buy SQQQ
-                trade_value = short_price * target_short_shares
-                if trade_value <= cash:
+                # 3x mode: buy SQQQ — cap to what cash can afford
+                affordable = cash / max(short_price, 1e-9)
+                actual_shares = _round_shares(min(target_short_shares, affordable), cfg.share_rounding)
+                if actual_shares > 0:
+                    trade_value = short_price * actual_shares
                     cash -= trade_value
-                    shares[short_sym] = target_short_shares
+                    shares[short_sym] = actual_shares
                     open_trades[short_sym] = {
                         "symbol": short_sym,
                         "entry_date": date,
                         "entry_price": short_price,
-                        "shares": target_short_shares
+                        "shares": actual_shares
                     }
         
         # Update previous positions for next iteration
