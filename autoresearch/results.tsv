@@ -1,0 +1,3 @@
+timestamp	commit	strategy	status	full_return_pct	avg_outperformance	avg_trades_yr	avg_win_rate	avg_sharpe	worst_maxdd	description
+2026-04-04 14:13:18	d9337b3	autoresearch.experimental_strategy.ExperimentalStrategy	discard	577.62	1.4802	11.84	0.6668	1.1296	-28.32	return=+577.6% | avg_outperf=1.48x | trades/yr=11.8 | win=66.7% | sharpe=1.13 | maxDD=-28.3%
+2026-04-04 14:39:12	d9337b3	autoresearch.experimental_strategy.ExperimentalStrategy	discard	742.95	1.4718	16.83	0.7017	1.1948	-28.76	return=+742.9% | avg_outperf=1.47x | trades/yr=16.8 | win=70.2% | sharpe=1.19 | maxDD=-28.8%
