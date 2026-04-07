@@ -241,6 +241,19 @@ Extended 1990-2025 coverage (Iter31, 10 windows, data extended via ^NDX proxy):
   - dd_yr threshold -20 (vs -15): 2013-18 trades=11.7<12, 2013-24=1.75x catastrophic.
   All Iter32 experiments confirm: Iter31 is the global optimum across 1990-2025 windows.
 
+Iter32 post-baseline experiments (all rejected, Iter31 remains best):
+  - Sub-C CMF-adaptive hold (CMF>0→hold-9, CMF<=0→hold-12 vs fixed 11): all 5 original
+    windows worse. Hold-11 is the uniquely optimal fixed value; disrupting it with
+    CMF branching loses the critical day-11 votes that push 4→5. REJECT.
+  - Sub-F pv>=1.40 high-pv bypass: identical to Iter31 — no MFI>63 events at pv>=1.40
+    in any evaluation window. Threshold too high to fire. REJECT (no effect).
+  - Sub-F pv>=1.30 high-pv bypass: 2013-24=2.13x(-0.14), 2019-24=2.08x(-0.15),
+    2020-22=4.55x(-0.54). MFI filter was providing real exit alpha at pv 1.30-1.40.
+    REJECT.
+  - Sub-E EMA18 (vs EMA17) for pv<1.10 zone: 2013-18=1.36x(+0.01) but trades=11.8/yr
+    (<12 minimum). EMA18 slightly slower → more LONG days → fewer trade cycles.
+    EMA17 is the exact boundary between passing and failing the trade minimum. REJECT.
+
 Iteration 22 (historical): Shallow-Bear Recovery — fix SMA50/SMA200 lag.
 
 Key insight from regime analysis:
