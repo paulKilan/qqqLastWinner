@@ -26,8 +26,10 @@
   <!-- ── Page intro ── -->
   <div class="sim-intro">
     <div class="sim-intro-text">
-      <h2>Strategy vs Buy &amp; Hold &nbsp;·&nbsp; 2013 – 2024</h2>
-      <p>$10,000 starting capital &nbsp;·&nbsp; Iter31 ensemble strategy vs passive buy-and-hold &nbsp;·&nbsp; Log scale</p>
+      <h2>Strategy vs Buy &amp; Hold &nbsp;·&nbsp; <span id="date-range">2013 – today</span></h2>
+      <p>$10,000 starting capital &nbsp;·&nbsp; Iter31 ensemble strategy vs passive buy-and-hold &nbsp;·&nbsp; Log scale
+        &nbsp;<span id="refreshed-note" style="display:none" class="refreshed-tag"></span>
+      </p>
     </div>
     <div class="sim-controls">
       <div class="ticker-toggles" id="ticker-toggles"></div>
@@ -77,7 +79,7 @@
   <div class="stats-grid" id="stats-grid"></div>
 
   <footer>
-    <p>Strategy: Iter31 — 6-sub ensemble · $10,000 starting capital · 2013-01-02 to 2024-12-31</p>
+    <p>Strategy: Iter31 — 6-sub ensemble · $10,000 starting capital · <span id="footer-range">2013-01-02 to today</span></p>
     <p style="color:#555">Not financial advice. For research purposes only.</p>
   </footer>
 
@@ -98,8 +100,8 @@ let activeTickers = new Set(["QQQ","SPY","NVDA","TSLA","GOOGL"]);
 let activeRange   = "all";   // current range-btn selection
 let isZoomed      = false;   // true once user has zoomed/panned
 
-const FULL_START = "2013-01-02";
-const FULL_END   = "2024-12-31";
+let FULL_START = "2013-01-02";
+let FULL_END   = new Date().toISOString().slice(0, 10);   // filled from API
 
 const TICKER_NAMES = {
   QQQ:"Nasdaq-100 ETF", SPY:"S&P 500 ETF",
@@ -112,10 +114,30 @@ const TICKER_NAMES = {
 async function loadData() {
   const res = await fetch("/api/simulation");
   simData   = await res.json();
+
+  // Update date range from API response
+  FULL_START = simData.start || FULL_START;
+  FULL_END   = simData.end   || FULL_END;
+
+  // Update header date range label
+  const endLabel = new Date(FULL_END).toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"});
+  document.getElementById("date-range").textContent = `2013 – ${endLabel}`;
+
+  // Show refresh notice if data was auto-refreshed
+  if (simData.refreshed && simData.refreshed.length > 0) {
+    const note = document.getElementById("refreshed-note");
+    note.textContent = `↻ Auto-refreshed: ${simData.refreshed.join(", ")}`;
+    note.style.display = "inline";
+  }
+
   buildToggles();
   buildChart();
   buildStats();
   document.getElementById("chart-loading").style.display = "none";
+
+  // Update footer range
+  document.getElementById("footer-range").textContent = `${FULL_START} to ${FULL_END}`;
+
   // Fade hint out after 4 s
   setTimeout(() => {
     const h = document.getElementById("chart-hint");
@@ -401,9 +423,9 @@ function buildChart() {
           },
           limits: {
             x: {
-              min: new Date(FULL_START).getTime(),
-              max: new Date(FULL_END).getTime(),
-              minRange: 1000 * 60 * 60 * 24 * 30,  // min 30 days visible
+              min:      new Date(FULL_START).getTime(),
+              max:      new Date(FULL_END).getTime(),
+              minRange: 1000 * 60 * 60 * 24 * 30,   // min 30 days visible
             },
           },
         },

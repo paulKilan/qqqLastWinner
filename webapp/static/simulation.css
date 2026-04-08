@@ -10,6 +10,16 @@
   flex-wrap: wrap;
 }
 
+.refreshed-tag {
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(59,130,246,.12);
+  border: 1px solid rgba(59,130,246,.25);
+  padding: 2px 8px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
 .sim-intro-text h2 {
   font-size: 22px;
   font-weight: 700;

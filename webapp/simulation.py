@@ -6,7 +6,8 @@ equity curves + trade markers + stats for all tickers, ready for Chart.js.
 import os
 import sys
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT_DIR         = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+AUTORESEARCH_DIR = os.path.join(ROOT_DIR, "autoresearch")
 sys.path.insert(0, ROOT_DIR)
 
 import pandas as pd
@@ -15,10 +16,10 @@ import numpy as np
 from autoresearch.run_experiment import load_strategy, run_backtest
 from autoresearch.prepare import rolling_benchmarks, load_prices
 
-TICKERS = ["QQQ", "SPY", "NVDA", "TSLA", "GOOGL"]
-START   = "2013-01-02"
-END     = "2024-12-31"
-INITIAL = 10_000.0
+TICKERS        = ["QQQ", "SPY", "NVDA", "TSLA", "GOOGL"]
+START          = "2013-01-02"
+INITIAL        = 10_000.0
+STALE_DAYS     = 5   # refresh data if last row is older than this many calendar days
 
 COLORS = {
     "QQQ":   {"strat": "#3b82f6", "bh": "#93c5fd", "buy": "#22c55e", "sell": "#ef4444"},
@@ -117,8 +118,31 @@ def _trade_markers(trades_df: pd.DataFrame, equity_s: pd.Series) -> dict:
     return {"entries": entries, "exits": exits}
 
 
+def _is_stale(ticker: str) -> bool:
+    """Return True if the ticker's OHLCV file is missing or older than STALE_DAYS."""
+    from datetime import date
+    path = os.path.join(AUTORESEARCH_DIR, f"{ticker.lower()}_ohlcv.csv")
+    if not os.path.exists(path):
+        return True
+    df   = pd.read_csv(path, index_col=0, parse_dates=True)
+    last = df.index.max().date()
+    return (date.today() - last).days > STALE_DAYS
+
+
 def get_simulation_data() -> dict:
-    result = {"tickers": {}}
+    from datetime import date
+    end_date = date.today().strftime("%Y-%m-%d")
+
+    # Auto-refresh any ticker whose data is stale
+    from webapp.signals import refresh_ticker
+    refreshed = []
+    for ticker in TICKERS:
+        if _is_stale(ticker):
+            ok = refresh_ticker(ticker)
+            if ok:
+                refreshed.append(ticker)
+
+    result = {"tickers": {}, "start": START, "end": end_date, "refreshed": refreshed}
 
     for ticker in TICKERS:
         os.environ["STRATEGY_TICKER"] = ticker.upper()
@@ -131,8 +155,8 @@ def get_simulation_data() -> dict:
         strategy._ohlcv_ticker = None
 
         try:
-            trades_df, equity_df, _ = run_backtest(strategy, START, END, ticker=ticker)
-            bh_df = rolling_benchmarks(ticker, START, END)
+            trades_df, equity_df, _ = run_backtest(strategy, START, end_date, ticker=ticker)
+            bh_df = rolling_benchmarks(ticker, START, end_date)
 
             equity_s = equity_df["Equity"]
             bh_s     = bh_df["BuyHold_Equity"]

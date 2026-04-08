@@ -46,8 +46,9 @@ def api_signals():
 
 @app.route("/api/refresh")
 def api_refresh():
-    global _signal_cache
+    global _signal_cache, _sim_cache
     _signal_cache = get_all_signals(refresh_data=True)
+    _sim_cache    = None   # invalidate so simulation re-runs with fresh data
     return jsonify(_signal_cache)
 
 
