@@ -15,41 +15,53 @@ sys.path.insert(0, ROOT_DIR)
 
 from flask import Flask, render_template, jsonify
 from webapp.signals import get_all_signals
+from webapp.simulation import get_simulation_data
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
-# Cache signals so page loads are fast; refreshed on demand
-_cache = None
+_signal_cache = None
+_sim_cache    = None
 
 
 @app.route("/")
 def index():
-    global _cache
-    if _cache is None:
-        _cache = get_all_signals(refresh_data=False)
-    return render_template("index.html", data=_cache)
+    global _signal_cache
+    if _signal_cache is None:
+        _signal_cache = get_all_signals(refresh_data=False)
+    return render_template("index.html", data=_signal_cache)
+
+
+@app.route("/simulation")
+def simulation():
+    return render_template("simulation.html")
 
 
 @app.route("/api/signals")
 def api_signals():
-    """JSON endpoint — returns current signals without refreshing data."""
-    global _cache
-    if _cache is None:
-        _cache = get_all_signals(refresh_data=False)
-    return jsonify(_cache)
+    global _signal_cache
+    if _signal_cache is None:
+        _signal_cache = get_all_signals(refresh_data=False)
+    return jsonify(_signal_cache)
 
 
 @app.route("/api/refresh")
 def api_refresh():
-    """Fetch latest data from Yahoo Finance, recompute signals, return JSON."""
-    global _cache
-    _cache = get_all_signals(refresh_data=True)
-    return jsonify(_cache)
+    global _signal_cache
+    _signal_cache = get_all_signals(refresh_data=True)
+    return jsonify(_signal_cache)
+
+
+@app.route("/api/simulation")
+def api_simulation():
+    """Return equity curve data for all tickers (2013-2024). Cached after first call."""
+    global _sim_cache
+    if _sim_cache is None:
+        _sim_cache = get_simulation_data()
+    return jsonify(_sim_cache)
 
 
 if __name__ == "__main__":
     print("Starting dashboard at http://localhost:5000")
     print("Press Ctrl+C to stop.\n")
-    # Pre-load on startup
-    _cache = get_all_signals(refresh_data=False)
+    _signal_cache = get_all_signals(refresh_data=False)
     app.run(debug=False, port=5000)

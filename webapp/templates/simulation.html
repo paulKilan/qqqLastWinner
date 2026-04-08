@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Simulation — Iter31 Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <link rel="stylesheet" href="/static/simulation.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="header-left">
+      <h1>Iter31 Signal Dashboard</h1>
+      <span class="subtitle">QQQ Ensemble Strategy — 6-Sub Voting System</span>
+    </div>
+    <div class="header-right">
+      <nav class="nav-links">
+        <a href="/" class="nav-link">Signals</a>
+        <a href="/simulation" class="nav-link active">Simulation</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ── Page intro ── -->
+  <div class="sim-intro">
+    <div class="sim-intro-text">
+      <h2>Strategy vs Buy &amp; Hold &nbsp;·&nbsp; 2013 – 2024</h2>
+      <p>$10,000 starting capital · Iter31 ensemble strategy (6-sub voting) vs passive buy-and-hold of each ticker</p>
+    </div>
+    <div class="ticker-toggles" id="ticker-toggles">
+      <!-- Filled by JS -->
+    </div>
+  </div>
+
+  <!-- ── Main chart ── -->
+  <div class="chart-wrapper">
+    <div class="chart-legend" id="chart-legend"></div>
+    <div class="chart-box">
+      <canvas id="main-chart"></canvas>
+      <div class="chart-loading" id="chart-loading">
+        <div class="spinner"></div>
+        <span>Running backtests…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Stats cards grid ── -->
+  <div class="stats-grid" id="stats-grid">
+    <!-- Filled by JS -->
+  </div>
+
+  <footer>
+    <p>Strategy: Iter31 — 6-sub ensemble · $10,000 starting capital · 2013-01-02 to 2024-12-31</p>
+    <p style="color:#555">Not financial advice. For research purposes only.</p>
+  </footer>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let simData   = null;
+let chart     = null;
+let activeTickers = new Set(["QQQ","SPY","NVDA","TSLA","GOOGL"]);
+
+const TICKER_NAMES = {
+  QQQ:   "Nasdaq-100 ETF",
+  SPY:   "S&P 500 ETF",
+  NVDA:  "NVIDIA",
+  TSLA:  "Tesla",
+  GOOGL: "Alphabet (Google)",
+};
+
+// ── Fetch data ────────────────────────────────────────────────────────────────
+async function loadData() {
+  const res  = await fetch("/api/simulation");
+  simData    = await res.json();
+  buildToggles();
+  buildChart();
+  buildStats();
+  document.getElementById("chart-loading").style.display = "none";
+}
+
+// ── Ticker toggle buttons ─────────────────────────────────────────────────────
+function buildToggles() {
+  const container = document.getElementById("ticker-toggles");
+  container.innerHTML = "";
+  Object.entries(simData.tickers).forEach(([ticker, d]) => {
+    if (d.error) return;
+    const btn = document.createElement("button");
+    btn.className = "toggle-btn active";
+    btn.dataset.ticker = ticker;
+    btn.style.setProperty("--tc", d.colors.strat);
+    btn.innerHTML = `<span class="toggle-dot"></span>${ticker}`;
+    btn.onclick = () => toggleTicker(ticker, btn);
+    container.appendChild(btn);
+  });
+}
+
+function toggleTicker(ticker, btn) {
+  if (activeTickers.has(ticker)) {
+    if (activeTickers.size === 1) return; // keep at least one
+    activeTickers.delete(ticker);
+    btn.classList.remove("active");
+  } else {
+    activeTickers.add(ticker);
+    btn.classList.add("active");
+  }
+  rebuildDatasets();
+  updateStats();
+}
+
+// ── Build / rebuild Chart.js datasets ────────────────────────────────────────
+function makeDataset(ticker, d, isStrat) {
+  const color = isStrat ? d.colors.strat : d.colors.bh;
+  const label = isStrat ? `${ticker} Strategy` : `${ticker} Buy & Hold`;
+  return {
+    label,
+    data: d.dates.map((dt, i) => ({ x: dt, y: isStrat ? d.strat_equity[i] : d.bh_equity[i] })),
+    borderColor:     color,
+    backgroundColor: color + "18",
+    borderWidth:     isStrat ? 2.2 : 1.2,
+    borderDash:      isStrat ? [] : [5, 4],
+    pointRadius:     0,
+    tension:         0.3,
+    fill:            false,
+  };
+}
+
+function buildChart() {
+  const ctx = document.getElementById("main-chart").getContext("2d");
+  const datasets = buildDatasetList();
+
+  chart = new Chart(ctx, {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: "#1a1f2e",
+          borderColor:     "#252a35",
+          borderWidth:     1,
+          titleColor:      "#94a3b8",
+          bodyColor:       "#e2e8f0",
+          padding:         12,
+          callbacks: {
+            title: items => items[0].label,
+            label: item => {
+              const val  = item.raw.y;
+              const gain = ((val / 10000) - 1) * 100;
+              return `  ${item.dataset.label}: $${val.toLocaleString("en-US", {minimumFractionDigits:0, maximumFractionDigits:0})}  (${gain >= 0 ? "+" : ""}${gain.toFixed(1)}%)`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: { unit: "year", displayFormats: { year: "yyyy" } },
+          grid:  { color: "#1a1f2e" },
+          ticks: { color: "#64748b", maxTicksLimit: 12 },
+          border:{ color: "#252a35" },
+        },
+        y: {
+          position: "right",
+          grid:  { color: "#1a1f2e" },
+          ticks: {
+            color: "#64748b",
+            callback: val => "$" + (val >= 1000 ? (val/1000).toFixed(0)+"k" : val),
+          },
+          border:{ color: "#252a35" },
+        },
+      },
+      animation: { duration: 600, easing: "easeInOutQuart" },
+    },
+  });
+
+  buildLegend();
+}
+
+function buildDatasetList() {
+  const sets = [];
+  Object.entries(simData.tickers).forEach(([ticker, d]) => {
+    if (d.error || !activeTickers.has(ticker)) return;
+    sets.push(makeDataset(ticker, d, true));   // strategy solid
+    sets.push(makeDataset(ticker, d, false));  // B&H dashed
+  });
+  return sets;
+}
+
+function rebuildDatasets() {
+  chart.data.datasets = buildDatasetList();
+  chart.update("active");
+  buildLegend();
+}
+
+// ── Custom legend ─────────────────────────────────────────────────────────────
+function buildLegend() {
+  const el = document.getElementById("chart-legend");
+  el.innerHTML = "";
+  Object.entries(simData.tickers).forEach(([ticker, d]) => {
+    if (d.error || !activeTickers.has(ticker)) return;
+    el.innerHTML += `
+      <div class="legend-item">
+        <span class="legend-line solid" style="background:${d.colors.strat}"></span>
+        <span class="legend-label">${ticker} Strategy</span>
+        <span class="legend-line dashed" style="background:${d.colors.bh}"></span>
+        <span class="legend-label muted">${ticker} B&amp;H</span>
+      </div>`;
+  });
+}
+
+// ── Stats grid ────────────────────────────────────────────────────────────────
+function buildStats() {
+  updateStats();
+}
+
+function updateStats() {
+  const grid = document.getElementById("stats-grid");
+  grid.innerHTML = "";
+  Object.entries(simData.tickers).forEach(([ticker, d]) => {
+    if (d.error) return;
+    const s     = d.stats;
+    const dimmed = !activeTickers.has(ticker) ? "dimmed-card" : "";
+    const ratioCls = s.ratio >= 2 ? "good" : (s.ratio >= 1.5 ? "ok" : "poor");
+    const ddCls    = s.max_drawdown_pct < -30 ? "poor" : (s.max_drawdown_pct < -20 ? "ok" : "good");
+
+    grid.innerHTML += `
+    <div class="stat-card ${dimmed}" style="--tc:${d.colors.strat}">
+      <div class="stat-header">
+        <span class="stat-ticker">${ticker}</span>
+        <span class="stat-name">${TICKER_NAMES[ticker]}</span>
+      </div>
+
+      <div class="stat-equity-row">
+        <div class="stat-equity-block">
+          <div class="stat-equity-label">Strategy</div>
+          <div class="stat-equity-val" style="color:${d.colors.strat}">$${s.final_equity.toLocaleString()}</div>
+          <div class="stat-equity-pct">+${s.strat_return_pct.toFixed(1)}%</div>
+        </div>
+        <div class="stat-vs">vs</div>
+        <div class="stat-equity-block">
+          <div class="stat-equity-label">Buy &amp; Hold</div>
+          <div class="stat-equity-val" style="color:${d.colors.bh}">$${s.bh_final_equity.toLocaleString()}</div>
+          <div class="stat-equity-pct">+${s.bh_return_pct.toFixed(1)}%</div>
+        </div>
+        <div class="stat-ratio-block ${ratioCls}">
+          <div class="stat-ratio-val">${s.ratio.toFixed(2)}x</div>
+          <div class="stat-ratio-lbl">outperf</div>
+        </div>
+      </div>
+
+      <div class="stat-metrics">
+        <div class="stat-metric">
+          <span class="stat-metric-lbl">Max Drawdown</span>
+          <span class="stat-metric-val ${ddCls}">${s.max_drawdown_pct.toFixed(1)}%</span>
+        </div>
+        <div class="stat-metric">
+          <span class="stat-metric-lbl">Sharpe Ratio</span>
+          <span class="stat-metric-val">${s.sharpe.toFixed(2)}</span>
+        </div>
+        <div class="stat-metric">
+          <span class="stat-metric-lbl">Trades/Year</span>
+          <span class="stat-metric-val">${s.trades_per_year}</span>
+        </div>
+        <div class="stat-metric">
+          <span class="stat-metric-lbl">Total Trades</span>
+          <span class="stat-metric-val">${s.n_trades}</span>
+        </div>
+      </div>
+    </div>`;
+  });
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+// Chart.js needs the adapter for time scale
+const adapterScript = document.createElement("script");
+adapterScript.src = "https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js";
+adapterScript.onload = () => loadData();
+document.head.appendChild(adapterScript);
+</script>
+
+</body>
+</html>
