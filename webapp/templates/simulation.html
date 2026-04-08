@@ -27,7 +27,7 @@
   <div class="sim-intro">
     <div class="sim-intro-text">
       <h2>Strategy vs Buy &amp; Hold &nbsp;·&nbsp; 2013 – 2024</h2>
-      <p>$10,000 starting capital &nbsp;·&nbsp; Iter31 ensemble strategy vs passive buy-and-hold &nbsp;·&nbsp; Log scale shows proportional growth</p>
+      <p>$10,000 starting capital &nbsp;·&nbsp; Iter31 ensemble strategy vs passive buy-and-hold &nbsp;·&nbsp; Log scale</p>
     </div>
     <div class="sim-controls">
       <div class="ticker-toggles" id="ticker-toggles"></div>
@@ -41,14 +41,34 @@
 
   <!-- ── Main chart ── -->
   <div class="chart-wrapper">
-    <div class="chart-legend" id="chart-legend"></div>
+
+    <!-- Legend + range selector on same row -->
+    <div class="chart-toolbar">
+      <div class="chart-legend" id="chart-legend"></div>
+      <div class="chart-zoom-controls">
+        <div class="range-btns" id="range-btns">
+          <button class="range-btn" data-range="1">1Y</button>
+          <button class="range-btn" data-range="3">3Y</button>
+          <button class="range-btn" data-range="5">5Y</button>
+          <button class="range-btn active" data-range="all">All</button>
+        </div>
+        <div class="zoom-btns">
+          <button class="zoom-btn" id="btn-zoom-in"  title="Zoom in (scroll up)">+</button>
+          <button class="zoom-btn" id="btn-zoom-out" title="Zoom out (scroll down)">−</button>
+          <button class="zoom-btn reset" id="btn-reset" title="Reset to full view">↺</button>
+        </div>
+      </div>
+    </div>
+
     <div class="chart-box">
       <canvas id="main-chart"></canvas>
+      <div class="chart-hint" id="chart-hint">
+        Scroll to zoom &nbsp;·&nbsp; Drag to pan &nbsp;·&nbsp; Hover markers for trade details
+      </div>
       <div class="chart-loading" id="chart-loading">
         <div class="spinner"></div>
         <span>Running backtests…</span>
       </div>
-      <!-- Custom tooltip -->
       <div class="custom-tooltip" id="custom-tooltip" style="display:none"></div>
     </div>
   </div>
@@ -64,15 +84,22 @@
 <!-- ── Scripts ── -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────────────────────────────────────
-let simData        = null;
-let chart          = null;
-let showTrades     = true;
-let activeTickers  = new Set(["QQQ","SPY","NVDA","TSLA","GOOGL"]);
-let hoveredMarker  = null;   // currently hovered trade marker data
+let simData       = null;
+let chart         = null;
+let showTrades    = true;
+let activeTickers = new Set(["QQQ","SPY","NVDA","TSLA","GOOGL"]);
+let activeRange   = "all";   // current range-btn selection
+let isZoomed      = false;   // true once user has zoomed/panned
+
+const FULL_START = "2013-01-02";
+const FULL_END   = "2024-12-31";
 
 const TICKER_NAMES = {
   QQQ:"Nasdaq-100 ETF", SPY:"S&P 500 ETF",
@@ -89,10 +116,15 @@ async function loadData() {
   buildChart();
   buildStats();
   document.getElementById("chart-loading").style.display = "none";
+  // Fade hint out after 4 s
+  setTimeout(() => {
+    const h = document.getElementById("chart-hint");
+    if (h) h.style.opacity = "0";
+  }, 4000);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Ticker toggles + trade toggle
+// Toggles
 // ─────────────────────────────────────────────────────────────────────────────
 function buildToggles() {
   const c = document.getElementById("ticker-toggles");
@@ -128,6 +160,61 @@ function toggleTicker(tk, btn) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Range buttons
+// ─────────────────────────────────────────────────────────────────────────────
+function initRangeButtons() {
+  document.querySelectorAll(".range-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      activeRange = btn.dataset.range;
+      applyRange(activeRange);
+    });
+  });
+
+  document.getElementById("btn-zoom-in").addEventListener("click",  () => { chart.zoom(1.3); onZoom(); });
+  document.getElementById("btn-zoom-out").addEventListener("click", () => { chart.zoom(0.7); onZoom(); });
+  document.getElementById("btn-reset").addEventListener("click",    () => resetZoom());
+}
+
+function applyRange(range) {
+  if (range === "all") {
+    resetZoom();
+    return;
+  }
+  const years  = parseInt(range);
+  const endDt  = new Date(FULL_END);
+  const startDt = new Date(endDt);
+  startDt.setFullYear(startDt.getFullYear() - years);
+
+  chart.zoomScale("x", { min: startDt.getTime(), max: endDt.getTime() }, "active");
+  isZoomed = true;
+  updateResetBtn();
+}
+
+function resetZoom() {
+  chart.resetZoom("active");
+  isZoomed = false;
+  activeRange = "all";
+  document.querySelectorAll(".range-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.range === "all")
+  );
+  updateResetBtn();
+}
+
+function onZoom() {
+  isZoomed = true;
+  // Deselect range buttons when user manually zooms
+  document.querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+  updateResetBtn();
+}
+
+function updateResetBtn() {
+  const btn = document.getElementById("btn-reset");
+  btn.classList.toggle("active", isZoomed);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Dataset builders
 // ─────────────────────────────────────────────────────────────────────────────
 function lineDataset(tk, d, isStrat) {
@@ -136,8 +223,7 @@ function lineDataset(tk, d, isStrat) {
     type: "line",
     label: isStrat ? `${tk} Strategy` : `${tk} Buy & Hold`,
     data:  d.dates.map((dt, i) => ({
-      x: dt,
-      y: isStrat ? d.strat_equity[i] : d.bh_equity[i],
+      x: dt, y: isStrat ? d.strat_equity[i] : d.bh_equity[i],
     })),
     borderColor:     color,
     backgroundColor: color + "10",
@@ -148,20 +234,17 @@ function lineDataset(tk, d, isStrat) {
     tension:         0.3,
     fill:            false,
     order:           isStrat ? 2 : 3,
-    _ticker:  tk,
-    _isStrat: isStrat,
+    _ticker: tk, _isStrat: isStrat,
   };
 }
 
 function markerDataset(tk, d, kind) {
-  // kind = "entries" | "exits"
   const isEntry = kind === "entries";
   const color   = isEntry ? "#22c55e" : "#ef4444";
-  const points  = d.markers[kind];
   return {
     type:            "scatter",
     label:           `${tk} ${isEntry ? "Entry" : "Exit"}`,
-    data:            points.map(p => ({ x: p.x, y: p.y, meta: p.meta })),
+    data:            d.markers[kind].map(p => ({ x: p.x, y: p.y, meta: p.meta })),
     backgroundColor: color,
     borderColor:     "#0d0f14",
     borderWidth:     1.5,
@@ -170,9 +253,7 @@ function markerDataset(tk, d, kind) {
     pointStyle:      isEntry ? "triangle" : "rectRot",
     order:           1,
     showLine:        false,
-    _ticker: tk,
-    _isMark: true,
-    _kind:   kind,
+    _ticker: tk, _isMark: true, _kind: kind,
   };
 }
 
@@ -197,21 +278,20 @@ function rebuildDatasets() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Custom tooltip for trade markers
+// Trade marker tooltip
 // ─────────────────────────────────────────────────────────────────────────────
 const tooltipEl = document.getElementById("custom-tooltip");
 
 function showTradeTooltip(event, meta, kind, chartBox) {
-  const isEntry  = kind === "entries";
+  const isEntry   = kind === "entries";
   const profitCls = meta.profitable ? "profit-pos" : "profit-neg";
-  const profitSign = meta.profit_abs >= 0 ? "+" : "";
-  const dirLabel = meta.is_short ? "SHORT" : "LONG";
-  const dirCls   = meta.is_short ? "dir-short" : "dir-long";
+  const pSign     = meta.profit_abs >= 0 ? "+" : "";
+  const dirCls    = meta.is_short ? "dir-short" : "dir-long";
 
   tooltipEl.innerHTML = `
     <div class="tt-header">
-      <span class="tt-badge ${dirCls}">${dirLabel}</span>
-      <span class="tt-kind">${isEntry ? "Entry" : "Exit"}</span>
+      <span class="tt-badge ${dirCls}">${meta.is_short ? "SHORT" : "LONG"}</span>
+      <span class="tt-kind">${isEntry ? "▲ Entry" : "◆ Exit"}</span>
     </div>
     <div class="tt-row"><span class="tt-lbl">Entry date</span><span class="tt-val">${meta.entry_date}</span></div>
     <div class="tt-row"><span class="tt-lbl">Exit date</span><span class="tt-val">${meta.exit_date}</span></div>
@@ -223,20 +303,17 @@ function showTradeTooltip(event, meta, kind, chartBox) {
     <div class="tt-divider"></div>
     <div class="tt-row">
       <span class="tt-lbl">P&amp;L</span>
-      <span class="tt-val ${profitCls}">${profitSign}$${meta.profit_abs.toFixed(2)} (${meta.profit_pct >= 0 ? "+" : ""}${meta.profit_pct.toFixed(2)}%)</span>
+      <span class="tt-val ${profitCls}">${pSign}$${meta.profit_abs.toFixed(2)} &nbsp;(${meta.profit_pct >= 0 ? "+" : ""}${meta.profit_pct.toFixed(2)}%)</span>
     </div>
-    <div class="tt-row"><span class="tt-lbl">Portfolio after exit</span><span class="tt-val">$${meta.equity_after_exit.toLocaleString()}</span></div>
-  `;
+    <div class="tt-row"><span class="tt-lbl">Portfolio after exit</span><span class="tt-val">$${meta.equity_after_exit.toLocaleString()}</span></div>`;
 
-  const rect  = chartBox.getBoundingClientRect();
-  const pageX = event.clientX - rect.left;
-  const pageY = event.clientY - rect.top;
-  const ttW   = 260;
-  const ttH   = 230;
-  let   left  = pageX + 14;
-  let   top   = pageY - ttH / 2;
-
-  if (left + ttW > chartBox.clientWidth)  left = pageX - ttW - 14;
+  const rect = chartBox.getBoundingClientRect();
+  const px   = event.clientX - rect.left;
+  const py   = event.clientY - rect.top;
+  const ttW  = 264, ttH = 235;
+  let left   = px + 16;
+  let top    = py - ttH / 2;
+  if (left + ttW > chartBox.clientWidth)  left = px - ttW - 16;
   if (top < 8)                            top  = 8;
   if (top + ttH > chartBox.clientHeight) top  = chartBox.clientHeight - ttH - 8;
 
@@ -245,17 +322,15 @@ function showTradeTooltip(event, meta, kind, chartBox) {
   tooltipEl.style.display = "block";
 }
 
-function hideTradeTooltip() {
-  tooltipEl.style.display = "none";
-}
+function hideTradeTooltip() { tooltipEl.style.display = "none"; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Build chart
 // ─────────────────────────────────────────────────────────────────────────────
 function buildChart() {
-  const canvas  = document.getElementById("main-chart");
+  const canvas   = document.getElementById("main-chart");
   const chartBox = canvas.parentElement;
-  const ctx     = canvas.getContext("2d");
+  const ctx      = canvas.getContext("2d");
 
   chart = new Chart(ctx, {
     data: { datasets: buildDatasetList() },
@@ -266,12 +341,10 @@ function buildChart() {
 
       onHover(event, elements) {
         if (!elements.length) { hideTradeTooltip(); canvas.style.cursor = "default"; return; }
-        const el  = elements[0];
-        const ds  = chart.data.datasets[el.datasetIndex];
+        const ds = chart.data.datasets[elements[0].datasetIndex];
         if (ds._isMark) {
           canvas.style.cursor = "pointer";
-          const pt = ds.data[el.index];
-          showTradeTooltip(event.native, pt.meta, ds._kind, chartBox);
+          showTradeTooltip(event.native, ds.data[elements[0].index].meta, ds._kind, chartBox);
         } else {
           hideTradeTooltip();
           canvas.style.cursor = "crosshair";
@@ -281,7 +354,6 @@ function buildChart() {
       plugins: {
         legend: { display: false },
 
-        // Line chart tooltip (shown only for non-marker hover)
         tooltip: {
           filter: item => !chart.data.datasets[item.datasetIndex]._isMark,
           mode:   "index",
@@ -304,43 +376,79 @@ function buildChart() {
             },
           },
         },
+
+        // ── Zoom plugin ──────────────────────────────────────────────────────
+        zoom: {
+          pan: {
+            enabled:  true,
+            mode:     "x",
+            modifierKey: null,        // drag to pan (no key needed)
+            onPanStart({ chart }) {
+              hideTradeTooltip();
+              chart.canvas.style.cursor = "grabbing";
+              return true;
+            },
+            onPanComplete() {
+              onZoom();
+              chart.canvas.style.cursor = "crosshair";
+            },
+          },
+          zoom: {
+            wheel:  { enabled: true, speed: 0.08 },
+            pinch:  { enabled: true },
+            mode:   "x",
+            onZoomComplete() { onZoom(); },
+          },
+          limits: {
+            x: {
+              min: new Date(FULL_START).getTime(),
+              max: new Date(FULL_END).getTime(),
+              minRange: 1000 * 60 * 60 * 24 * 30,  // min 30 days visible
+            },
+          },
+        },
       },
 
       scales: {
         x: {
-          type: "time",
-          time: { unit: "year", displayFormats: { year: "yyyy" } },
+          type:  "time",
+          time:  {
+            unit: "year",
+            displayFormats: { month: "MMM yy", quarter: "Q yyyy", year: "yyyy" },
+          },
           grid:   { color: "#1a1f2e" },
-          ticks:  { color: "#64748b", maxTicksLimit: 12 },
+          ticks:  { color: "#64748b", maxTicksLimit: 12, autoSkip: true },
           border: { color: "#252a35" },
         },
         y: {
-          type: "logarithmic",
+          type:     "logarithmic",
           position: "right",
-          grid:  { color: "#1a1f2e" },
+          grid:     { color: "#1a1f2e" },
           ticks: {
             color: "#64748b",
             callback: val => {
-              // Show clean labels at powers of 10 and halves
-              const labels = [10000, 25000, 50000, 100000, 250000, 500000,
-                              1000000, 2500000, 5000000];
-              if (labels.includes(val)) {
-                if (val >= 1000000) return "$" + (val/1000000).toFixed(1) + "M";
-                if (val >= 1000)    return "$" + (val/1000).toFixed(0) + "k";
-                return "$" + val;
-              }
-              return null;
+              const labels = [10000,25000,50000,100000,250000,500000,
+                              1000000,2500000,5000000];
+              if (!labels.includes(val)) return null;
+              if (val >= 1000000) return "$" + (val/1000000).toFixed(1) + "M";
+              if (val >= 1000)    return "$" + (val/1000).toFixed(0) + "k";
+              return "$" + val;
             },
           },
           border: { color: "#252a35" },
           min: 8000,
         },
       },
-      animation: { duration: 700, easing: "easeInOutQuart" },
+
+      animation: { duration: 400, easing: "easeOutQuart" },
     },
   });
 
+  initRangeButtons();
   buildLegend();
+
+  // Double-click resets zoom
+  canvas.addEventListener("dblclick", () => resetZoom());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -350,13 +458,14 @@ function buildLegend() {
   const el = document.getElementById("chart-legend");
   el.innerHTML = `
     <div class="legend-item">
-      <span class="legend-swatch solid" style="background:#22c55e"></span>
-      <span class="legend-label muted">Entry (triangle)</span>
+      <span class="legend-swatch" style="background:#22c55e"></span>
+      <span class="legend-label muted">Entry ▲</span>
     </div>
     <div class="legend-item">
-      <span class="legend-swatch solid" style="background:#ef4444"></span>
-      <span class="legend-label muted">Exit (diamond)</span>
+      <span class="legend-swatch" style="background:#ef4444"></span>
+      <span class="legend-label muted">Exit ◆</span>
     </div>
+    <span class="legend-note">1 trade = 1 entry + 1 exit</span>
     <div class="legend-sep"></div>`;
 
   Object.entries(simData.tickers).forEach(([tk, d]) => {
@@ -381,11 +490,11 @@ function updateStats() {
   grid.innerHTML = "";
   Object.entries(simData.tickers).forEach(([tk, d]) => {
     if (d.error) return;
-    const s      = d.stats;
+    const s     = d.stats;
     const dimmed = !activeTickers.has(tk) ? "dimmed-card" : "";
-    const rCls   = s.ratio >= 2 ? "good" : (s.ratio >= 1.5 ? "ok" : "poor");
-    const ddCls  = s.max_drawdown_pct < -30 ? "poor" : (s.max_drawdown_pct < -20 ? "ok" : "good");
-    const wrCls  = s.win_rate >= 65 ? "good" : (s.win_rate >= 55 ? "ok" : "poor");
+    const rCls  = s.ratio >= 2 ? "good" : (s.ratio >= 1.5 ? "ok" : "poor");
+    const ddCls = s.max_drawdown_pct < -30 ? "poor" : (s.max_drawdown_pct < -20 ? "ok" : "good");
+    const wrCls = s.win_rate >= 65 ? "good" : (s.win_rate >= 55 ? "ok" : "poor");
 
     grid.innerHTML += `
     <div class="stat-card ${dimmed}" style="--tc:${d.colors.strat}">
@@ -393,7 +502,6 @@ function updateStats() {
         <span class="stat-ticker">${tk}</span>
         <span class="stat-name">${TICKER_NAMES[tk]}</span>
       </div>
-
       <div class="stat-equity-row">
         <div class="stat-equity-block">
           <div class="stat-equity-label">Strategy</div>
@@ -411,7 +519,6 @@ function updateStats() {
           <div class="stat-ratio-lbl">outperf</div>
         </div>
       </div>
-
       <div class="stat-metrics">
         <div class="stat-metric">
           <span class="stat-metric-lbl">Max Drawdown</span>
@@ -426,16 +533,16 @@ function updateStats() {
           <span class="stat-metric-val ${wrCls}">${s.win_rate.toFixed(1)}%</span>
         </div>
         <div class="stat-metric">
-          <span class="stat-metric-lbl">Trades/Year</span>
-          <span class="stat-metric-val">${s.trades_per_year}</span>
+          <span class="stat-metric-lbl">Round-trips/Year</span>
+          <span class="stat-metric-val" title="1 round-trip = entry + exit">${s.trades_per_year}</span>
         </div>
         <div class="stat-metric">
           <span class="stat-metric-lbl">Avg Trade P&amp;L</span>
           <span class="stat-metric-val ${s.avg_profit_pct >= 0 ? 'good' : 'poor'}">${s.avg_profit_pct >= 0 ? '+' : ''}${s.avg_profit_pct.toFixed(2)}%</span>
         </div>
         <div class="stat-metric">
-          <span class="stat-metric-lbl">Total Trades</span>
-          <span class="stat-metric-val">${s.n_trades}</span>
+          <span class="stat-metric-lbl">Total Round-trips</span>
+          <span class="stat-metric-val">${s.n_trades} <span style="font-size:10px;color:var(--muted)">(×2 markers)</span></span>
         </div>
       </div>
     </div>`;

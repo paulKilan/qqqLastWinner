@@ -122,12 +122,87 @@
   padding: 24px 32px 8px;
 }
 
+/* ── Toolbar: legend left, zoom controls right ── */
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
 .chart-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 14px;
+  align-items: center;
+  gap: 14px;
 }
+
+/* ── Zoom controls ── */
+.chart-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Range preset buttons */
+.range-btns {
+  display: flex;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px;
+}
+
+.range-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.3px;
+}
+
+.range-btn:hover  { color: var(--text); background: var(--border); }
+.range-btn.active { color: var(--text); background: var(--border); }
+
+/* Zoom +/− and reset buttons */
+.zoom-btns {
+  display: flex;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px;
+}
+
+.zoom-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 700;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  line-height: 1;
+}
+
+.zoom-btn:hover  { color: var(--text); background: var(--border); }
+.zoom-btn.reset  { font-size: 14px; }
+.zoom-btn.reset.active { color: var(--accent); }
 
 .legend-item {
   display: flex;
@@ -169,6 +244,15 @@
 .legend-label       { color: var(--text); }
 .legend-label.muted { color: var(--muted); }
 
+.legend-note {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--border);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
 .chart-box {
   position: relative;
   background: var(--surface);
@@ -179,6 +263,23 @@
 }
 
 #main-chart { width: 100% !important; height: 100% !important; }
+
+/* ── Interaction hint ── */
+.chart-hint {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(13,15,20,0.75);
+  padding: 4px 12px;
+  border-radius: 20px;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 1.5s ease;
+  white-space: nowrap;
+}
 
 /* ── Loading spinner ── */
 .chart-loading {
