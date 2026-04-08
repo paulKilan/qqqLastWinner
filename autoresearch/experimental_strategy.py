@@ -303,18 +303,22 @@ import pandas as pd
 import numpy as np
 from strategy.base_strategy import BaseStrategy
 
-# ── OHLCV data path ───────────────────────────────────────────────────────────
-_OHLCV_PATH = os.path.join(os.path.dirname(__file__), "qqq_ohlcv.csv")
-_OHLCV_CACHE: pd.DataFrame = None
+# ── OHLCV data loader (ticker-aware via STRATEGY_TICKER env var) ──────────────
+# Set os.environ['STRATEGY_TICKER'] = 'NVDA' (or any ticker) before running
+# to load a different ticker's OHLCV file. Defaults to 'QQQ'.
+_OHLCV_CACHE: dict = {}  # ticker -> DataFrame
 
 
-def _load_ohlcv() -> pd.DataFrame:
-    global _OHLCV_CACHE
-    if _OHLCV_CACHE is None:
-        df = pd.read_csv(_OHLCV_PATH, index_col=0, parse_dates=True)
+def _load_ohlcv(ticker: str = None) -> pd.DataFrame:
+    """Load OHLCV CSV for *ticker* (default: STRATEGY_TICKER env var or 'QQQ')."""
+    if ticker is None:
+        ticker = os.environ.get("STRATEGY_TICKER", "QQQ").upper()
+    if ticker not in _OHLCV_CACHE:
+        path = os.path.join(os.path.dirname(__file__), f"{ticker.lower()}_ohlcv.csv")
+        df = pd.read_csv(path, index_col=0, parse_dates=True)
         df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
-        _OHLCV_CACHE = df
-    return _OHLCV_CACHE
+        _OHLCV_CACHE[ticker] = df
+    return _OHLCV_CACHE[ticker]
 
 
 def _rsi(series: pd.Series, period: int) -> pd.Series:
@@ -430,8 +434,11 @@ class ExperimentalStrategy(BaseStrategy):
         self._ohlcv_data = None  # loaded lazily
 
     def _get_ohlcv(self) -> pd.DataFrame:
-        if self._ohlcv_data is None:
-            self._ohlcv_data = _load_ohlcv()
+        ticker = os.environ.get("STRATEGY_TICKER", "QQQ").upper()
+        # Invalidate cache if ticker has changed between runs
+        if self._ohlcv_data is None or getattr(self, "_ohlcv_ticker", None) != ticker:
+            self._ohlcv_data   = _load_ohlcv(ticker)
+            self._ohlcv_ticker = ticker
         return self._ohlcv_data
 
     def _calculate_positions(self, data: pd.DataFrame, contextData=None) -> pd.DataFrame:

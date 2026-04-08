@@ -29,7 +29,10 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
 
 from backtest.backtest import BacktestConfig, run_backtest_with_strategy
-from autoresearch.prepare import qqq_buy_and_hold, qqq_rolling_benchmarks, load_qqq_prices
+from autoresearch.prepare import (
+    load_prices, buy_and_hold,
+    load_qqq_prices, qqq_buy_and_hold, qqq_rolling_benchmarks,  # backward compat
+)
 
 # ── Constants ────────────────────────────────────────────────────────────────
 INITIAL_CAPITAL = 10_000.0
@@ -78,9 +81,9 @@ def load_strategy(module_path: str, class_name: str):
     return cls()
 
 
-def run_backtest(strategy, start_date: str, end_date: str):
-    """Run a 1x (QQQ long/short) backtest. Returns (trades_df, equity_df, issues_df)."""
-    qqq = load_qqq_prices()
+def run_backtest(strategy, start_date: str, end_date: str, ticker: str = "QQQ"):
+    """Run a 1x long/short backtest on *ticker*. Returns (trades_df, equity_df, issues_df)."""
+    prices = load_prices(ticker)
     cfg = BacktestConfig(
         start_date=start_date,
         end_date=end_date,
@@ -91,19 +94,19 @@ def run_backtest(strategy, start_date: str, end_date: str):
     )
     return run_backtest_with_strategy(
         strategy=strategy,
-        tqqq_prices=qqq,
-        sqqq_prices=qqq,
+        tqqq_prices=prices,
+        sqqq_prices=prices,
         cfg=cfg,
         contextData={},
     )
 
 
-def evaluate_window(strategy, start_date: str, end_date: str) -> dict:
+def evaluate_window(strategy, start_date: str, end_date: str, ticker: str = "QQQ") -> dict:
     """
     Backtest a strategy on a single window and compute evaluation metrics.
     Returns a dict with all metrics, or raises on failure.
     """
-    trades, equity, issues = run_backtest(strategy, start_date, end_date)
+    trades, equity, issues = run_backtest(strategy, start_date, end_date, ticker=ticker)
 
     if equity.empty:
         raise ValueError(f"Empty equity curve for {start_date} to {end_date}")
@@ -113,15 +116,15 @@ def evaluate_window(strategy, start_date: str, end_date: str) -> dict:
     strat_return = (final_equity - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100.0
     n_trades = len(trades)
 
-    # QQQ benchmark
-    bench = qqq_buy_and_hold(start_date, end_date)
-    qqq_return = bench["return_pct"]
+    # Ticker benchmark (compare strategy vs buy-and-hold of the SAME ticker)
+    bench      = buy_and_hold(ticker, start_date, end_date)
+    bh_return  = bench["return_pct"]
 
-    # Outperformance ratio (handle negative QQQ returns)
-    if qqq_return > 0:
-        outperformance_ratio = strat_return / qqq_return
-    elif qqq_return < 0:
-        outperformance_ratio = strat_return / qqq_return if strat_return < 0 else 10.0
+    # Outperformance ratio (handle negative benchmark returns)
+    if bh_return > 0:
+        outperformance_ratio = strat_return / bh_return
+    elif bh_return < 0:
+        outperformance_ratio = strat_return / bh_return if strat_return < 0 else 10.0
     else:
         outperformance_ratio = 10.0 if strat_return > 0 else 0.0
 
@@ -147,19 +150,19 @@ def evaluate_window(strategy, start_date: str, end_date: str) -> dict:
 
     return {
         "window": f"{start_date} to {end_date}",
-        "strat_return_pct": round(strat_return, 4),
-        "qqq_return_pct": round(qqq_return, 4),
+        "strat_return_pct":    round(strat_return, 4),
+        "qqq_return_pct":      round(bh_return, 4),   # field name kept for backward compat
         "outperformance_ratio": round(outperformance_ratio, 4),
-        "n_trades": n_trades,
-        "trades_per_year": round(trades_per_year, 2),
-        "win_rate": round(win_rate, 4),
-        "max_drawdown_pct": round(max_dd, 4),
-        "sharpe": round(sharpe, 4),
-        "final_equity": round(final_equity, 2),
+        "n_trades":            n_trades,
+        "trades_per_year":     round(trades_per_year, 2),
+        "win_rate":            round(win_rate, 4),
+        "max_drawdown_pct":    round(max_dd, 4),
+        "sharpe":              round(sharpe, 4),
+        "final_equity":        round(final_equity, 2),
     }
 
 
-def evaluate_strategy(module_path: str, class_name: str, windows=None) -> dict:
+def evaluate_strategy(module_path: str, class_name: str, windows=None, ticker: str = "QQQ") -> dict:
     """
     Full evaluation of a strategy across all windows.
 
@@ -174,6 +177,9 @@ def evaluate_strategy(module_path: str, class_name: str, windows=None) -> dict:
     """
     if windows is None:
         windows = EVAL_WINDOWS
+
+    # Tell the strategy which ticker's OHLCV file to load
+    os.environ["STRATEGY_TICKER"] = ticker.upper()
 
     try:
         strategy = load_strategy(module_path, class_name)
@@ -191,7 +197,7 @@ def evaluate_strategy(module_path: str, class_name: str, windows=None) -> dict:
 
     for start, end in windows:
         try:
-            result = evaluate_window(strategy, start, end)
+            result = evaluate_window(strategy, start, end, ticker=ticker)
             window_results.append(result)
 
             # Check criteria for this window
@@ -304,17 +310,19 @@ def log_result(module_path: str, class_name: str, result: dict):
     print(f"\nResult logged to {RESULTS_FILE}")
 
 
-def print_report(module_path: str, class_name: str, result: dict):
+def print_report(module_path: str, class_name: str, result: dict, ticker: str = "QQQ"):
     """Print a human-readable evaluation report."""
     W = 100
     print("\n" + "=" * W)
     print(f"  AUTORESEARCH EXPERIMENT REPORT")
     print(f"  Strategy: {module_path}.{class_name}")
+    print(f"  Ticker:   {ticker.upper()}")
     print(f"  Status:   {result['status'].upper()}")
     print("=" * W)
 
+    bh_label = f"{ticker.upper()}%"
     if result["windows"]:
-        print(f"\n  {'Window':<35} {'Strat%':>9} {'QQQ%':>9} {'Ratio':>7} "
+        print(f"\n  {'Window':<35} {'Strat%':>9} {bh_label:>9} {'Ratio':>7} "
               f"{'Trades':>7} {'Tr/Yr':>7} {'Win%':>7} {'MaxDD':>8} {'Sharpe':>7}")
         print("  " + "-" * (W - 2))
 
@@ -356,6 +364,9 @@ def main():
     parser = argparse.ArgumentParser(description="Run autoresearch experiment on a strategy")
     parser.add_argument("module_path", help="Python module path (e.g., strategy.sma_crossover_strategy)")
     parser.add_argument("class_name", help="Strategy class name (e.g., SmaCrossoverStrategy)")
+    parser.add_argument("--ticker", default="QQQ",
+                        help="Ticker to trade and benchmark against (default: QQQ). "
+                             "Example: --ticker SPY  or  --ticker NVDA")
     parser.add_argument("--start", default=None, help="Override start date for single-window eval")
     parser.add_argument("--end", default=None, help="Override end date for single-window eval")
     parser.add_argument("--no-log", action="store_true", help="Don't log to results.tsv")
@@ -365,8 +376,8 @@ def main():
     if args.start and args.end:
         windows = [(args.start, args.end)]
 
-    result = evaluate_strategy(args.module_path, args.class_name, windows=windows)
-    print_report(args.module_path, args.class_name, result)
+    result = evaluate_strategy(args.module_path, args.class_name, windows=windows, ticker=args.ticker)
+    print_report(args.module_path, args.class_name, result, ticker=args.ticker)
 
     if not args.no_log:
         log_result(args.module_path, args.class_name, result)
