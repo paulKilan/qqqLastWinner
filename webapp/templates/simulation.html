@@ -6,7 +6,6 @@
   <title>Simulation — Iter31 Dashboard</title>
   <link rel="stylesheet" href="/static/style.css"/>
   <link rel="stylesheet" href="/static/simulation.css"/>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -28,10 +27,15 @@
   <div class="sim-intro">
     <div class="sim-intro-text">
       <h2>Strategy vs Buy &amp; Hold &nbsp;·&nbsp; 2013 – 2024</h2>
-      <p>$10,000 starting capital · Iter31 ensemble strategy (6-sub voting) vs passive buy-and-hold of each ticker</p>
+      <p>$10,000 starting capital &nbsp;·&nbsp; Iter31 ensemble strategy vs passive buy-and-hold &nbsp;·&nbsp; Log scale shows proportional growth</p>
     </div>
-    <div class="ticker-toggles" id="ticker-toggles">
-      <!-- Filled by JS -->
+    <div class="sim-controls">
+      <div class="ticker-toggles" id="ticker-toggles"></div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="show-trades" checked/>
+        <span class="switch-track"></span>
+        <span class="switch-label">Show trades</span>
+      </label>
     </div>
   </div>
 
@@ -44,150 +48,144 @@
         <div class="spinner"></div>
         <span>Running backtests…</span>
       </div>
+      <!-- Custom tooltip -->
+      <div class="custom-tooltip" id="custom-tooltip" style="display:none"></div>
     </div>
   </div>
 
-  <!-- ── Stats cards grid ── -->
-  <div class="stats-grid" id="stats-grid">
-    <!-- Filled by JS -->
-  </div>
+  <!-- ── Stats grid ── -->
+  <div class="stats-grid" id="stats-grid"></div>
 
   <footer>
     <p>Strategy: Iter31 — 6-sub ensemble · $10,000 starting capital · 2013-01-02 to 2024-12-31</p>
     <p style="color:#555">Not financial advice. For research purposes only.</p>
   </footer>
 
+<!-- ── Scripts ── -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script>
-// ── State ─────────────────────────────────────────────────────────────────────
-let simData   = null;
-let chart     = null;
-let activeTickers = new Set(["QQQ","SPY","NVDA","TSLA","GOOGL"]);
+// ─────────────────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────────────────
+let simData        = null;
+let chart          = null;
+let showTrades     = true;
+let activeTickers  = new Set(["QQQ","SPY","NVDA","TSLA","GOOGL"]);
+let hoveredMarker  = null;   // currently hovered trade marker data
 
 const TICKER_NAMES = {
-  QQQ:   "Nasdaq-100 ETF",
-  SPY:   "S&P 500 ETF",
-  NVDA:  "NVIDIA",
-  TSLA:  "Tesla",
-  GOOGL: "Alphabet (Google)",
+  QQQ:"Nasdaq-100 ETF", SPY:"S&P 500 ETF",
+  NVDA:"NVIDIA", TSLA:"Tesla", GOOGL:"Alphabet (Google)",
 };
 
-// ── Fetch data ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Fetch + boot
+// ─────────────────────────────────────────────────────────────────────────────
 async function loadData() {
-  const res  = await fetch("/api/simulation");
-  simData    = await res.json();
+  const res = await fetch("/api/simulation");
+  simData   = await res.json();
   buildToggles();
   buildChart();
   buildStats();
   document.getElementById("chart-loading").style.display = "none";
 }
 
-// ── Ticker toggle buttons ─────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Ticker toggles + trade toggle
+// ─────────────────────────────────────────────────────────────────────────────
 function buildToggles() {
-  const container = document.getElementById("ticker-toggles");
-  container.innerHTML = "";
-  Object.entries(simData.tickers).forEach(([ticker, d]) => {
+  const c = document.getElementById("ticker-toggles");
+  c.innerHTML = "";
+  Object.entries(simData.tickers).forEach(([tk, d]) => {
     if (d.error) return;
     const btn = document.createElement("button");
     btn.className = "toggle-btn active";
-    btn.dataset.ticker = ticker;
+    btn.dataset.ticker = tk;
     btn.style.setProperty("--tc", d.colors.strat);
-    btn.innerHTML = `<span class="toggle-dot"></span>${ticker}`;
-    btn.onclick = () => toggleTicker(ticker, btn);
-    container.appendChild(btn);
+    btn.innerHTML = `<span class="toggle-dot"></span>${tk}`;
+    btn.onclick = () => toggleTicker(tk, btn);
+    c.appendChild(btn);
   });
+
+  document.getElementById("show-trades").onchange = e => {
+    showTrades = e.target.checked;
+    rebuildDatasets();
+  };
 }
 
-function toggleTicker(ticker, btn) {
-  if (activeTickers.has(ticker)) {
-    if (activeTickers.size === 1) return; // keep at least one
-    activeTickers.delete(ticker);
+function toggleTicker(tk, btn) {
+  if (activeTickers.has(tk)) {
+    if (activeTickers.size === 1) return;
+    activeTickers.delete(tk);
     btn.classList.remove("active");
   } else {
-    activeTickers.add(ticker);
+    activeTickers.add(tk);
     btn.classList.add("active");
   }
   rebuildDatasets();
   updateStats();
 }
 
-// ── Build / rebuild Chart.js datasets ────────────────────────────────────────
-function makeDataset(ticker, d, isStrat) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Dataset builders
+// ─────────────────────────────────────────────────────────────────────────────
+function lineDataset(tk, d, isStrat) {
   const color = isStrat ? d.colors.strat : d.colors.bh;
-  const label = isStrat ? `${ticker} Strategy` : `${ticker} Buy & Hold`;
   return {
-    label,
-    data: d.dates.map((dt, i) => ({ x: dt, y: isStrat ? d.strat_equity[i] : d.bh_equity[i] })),
+    type: "line",
+    label: isStrat ? `${tk} Strategy` : `${tk} Buy & Hold`,
+    data:  d.dates.map((dt, i) => ({
+      x: dt,
+      y: isStrat ? d.strat_equity[i] : d.bh_equity[i],
+    })),
     borderColor:     color,
-    backgroundColor: color + "18",
-    borderWidth:     isStrat ? 2.2 : 1.2,
-    borderDash:      isStrat ? [] : [5, 4],
+    backgroundColor: color + "10",
+    borderWidth:     isStrat ? 2.0 : 1.2,
+    borderDash:      isStrat ? [] : [6, 4],
     pointRadius:     0,
+    pointHitRadius:  0,
     tension:         0.3,
     fill:            false,
+    order:           isStrat ? 2 : 3,
+    _ticker:  tk,
+    _isStrat: isStrat,
   };
 }
 
-function buildChart() {
-  const ctx = document.getElementById("main-chart").getContext("2d");
-  const datasets = buildDatasetList();
-
-  chart = new Chart(ctx, {
-    type: "line",
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          backgroundColor: "#1a1f2e",
-          borderColor:     "#252a35",
-          borderWidth:     1,
-          titleColor:      "#94a3b8",
-          bodyColor:       "#e2e8f0",
-          padding:         12,
-          callbacks: {
-            title: items => items[0].label,
-            label: item => {
-              const val  = item.raw.y;
-              const gain = ((val / 10000) - 1) * 100;
-              return `  ${item.dataset.label}: $${val.toLocaleString("en-US", {minimumFractionDigits:0, maximumFractionDigits:0})}  (${gain >= 0 ? "+" : ""}${gain.toFixed(1)}%)`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: {
-          type: "time",
-          time: { unit: "year", displayFormats: { year: "yyyy" } },
-          grid:  { color: "#1a1f2e" },
-          ticks: { color: "#64748b", maxTicksLimit: 12 },
-          border:{ color: "#252a35" },
-        },
-        y: {
-          position: "right",
-          grid:  { color: "#1a1f2e" },
-          ticks: {
-            color: "#64748b",
-            callback: val => "$" + (val >= 1000 ? (val/1000).toFixed(0)+"k" : val),
-          },
-          border:{ color: "#252a35" },
-        },
-      },
-      animation: { duration: 600, easing: "easeInOutQuart" },
-    },
-  });
-
-  buildLegend();
+function markerDataset(tk, d, kind) {
+  // kind = "entries" | "exits"
+  const isEntry = kind === "entries";
+  const color   = isEntry ? "#22c55e" : "#ef4444";
+  const points  = d.markers[kind];
+  return {
+    type:            "scatter",
+    label:           `${tk} ${isEntry ? "Entry" : "Exit"}`,
+    data:            points.map(p => ({ x: p.x, y: p.y, meta: p.meta })),
+    backgroundColor: color,
+    borderColor:     "#0d0f14",
+    borderWidth:     1.5,
+    pointRadius:     5,
+    pointHoverRadius:8,
+    pointStyle:      isEntry ? "triangle" : "rectRot",
+    order:           1,
+    showLine:        false,
+    _ticker: tk,
+    _isMark: true,
+    _kind:   kind,
+  };
 }
 
 function buildDatasetList() {
   const sets = [];
-  Object.entries(simData.tickers).forEach(([ticker, d]) => {
-    if (d.error || !activeTickers.has(ticker)) return;
-    sets.push(makeDataset(ticker, d, true));   // strategy solid
-    sets.push(makeDataset(ticker, d, false));  // B&H dashed
+  Object.entries(simData.tickers).forEach(([tk, d]) => {
+    if (d.error || !activeTickers.has(tk)) return;
+    sets.push(lineDataset(tk, d, true));
+    sets.push(lineDataset(tk, d, false));
+    if (showTrades && d.markers) {
+      sets.push(markerDataset(tk, d, "entries"));
+      sets.push(markerDataset(tk, d, "exits"));
+    }
   });
   return sets;
 }
@@ -198,42 +196,202 @@ function rebuildDatasets() {
   buildLegend();
 }
 
-// ── Custom legend ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom tooltip for trade markers
+// ─────────────────────────────────────────────────────────────────────────────
+const tooltipEl = document.getElementById("custom-tooltip");
+
+function showTradeTooltip(event, meta, kind, chartBox) {
+  const isEntry  = kind === "entries";
+  const profitCls = meta.profitable ? "profit-pos" : "profit-neg";
+  const profitSign = meta.profit_abs >= 0 ? "+" : "";
+  const dirLabel = meta.is_short ? "SHORT" : "LONG";
+  const dirCls   = meta.is_short ? "dir-short" : "dir-long";
+
+  tooltipEl.innerHTML = `
+    <div class="tt-header">
+      <span class="tt-badge ${dirCls}">${dirLabel}</span>
+      <span class="tt-kind">${isEntry ? "Entry" : "Exit"}</span>
+    </div>
+    <div class="tt-row"><span class="tt-lbl">Entry date</span><span class="tt-val">${meta.entry_date}</span></div>
+    <div class="tt-row"><span class="tt-lbl">Exit date</span><span class="tt-val">${meta.exit_date}</span></div>
+    <div class="tt-row"><span class="tt-lbl">Duration</span><span class="tt-val">${meta.duration} days</span></div>
+    <div class="tt-divider"></div>
+    <div class="tt-row"><span class="tt-lbl">Entry price</span><span class="tt-val">$${meta.entry_price.toFixed(2)}</span></div>
+    <div class="tt-row"><span class="tt-lbl">Exit price</span><span class="tt-val">$${meta.exit_price.toFixed(2)}</span></div>
+    <div class="tt-row"><span class="tt-lbl">Shares</span><span class="tt-val">${meta.shares.toFixed(2)}</span></div>
+    <div class="tt-divider"></div>
+    <div class="tt-row">
+      <span class="tt-lbl">P&amp;L</span>
+      <span class="tt-val ${profitCls}">${profitSign}$${meta.profit_abs.toFixed(2)} (${meta.profit_pct >= 0 ? "+" : ""}${meta.profit_pct.toFixed(2)}%)</span>
+    </div>
+    <div class="tt-row"><span class="tt-lbl">Portfolio after exit</span><span class="tt-val">$${meta.equity_after_exit.toLocaleString()}</span></div>
+  `;
+
+  const rect  = chartBox.getBoundingClientRect();
+  const pageX = event.clientX - rect.left;
+  const pageY = event.clientY - rect.top;
+  const ttW   = 260;
+  const ttH   = 230;
+  let   left  = pageX + 14;
+  let   top   = pageY - ttH / 2;
+
+  if (left + ttW > chartBox.clientWidth)  left = pageX - ttW - 14;
+  if (top < 8)                            top  = 8;
+  if (top + ttH > chartBox.clientHeight) top  = chartBox.clientHeight - ttH - 8;
+
+  tooltipEl.style.left    = left + "px";
+  tooltipEl.style.top     = top  + "px";
+  tooltipEl.style.display = "block";
+}
+
+function hideTradeTooltip() {
+  tooltipEl.style.display = "none";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Build chart
+// ─────────────────────────────────────────────────────────────────────────────
+function buildChart() {
+  const canvas  = document.getElementById("main-chart");
+  const chartBox = canvas.parentElement;
+  const ctx     = canvas.getContext("2d");
+
+  chart = new Chart(ctx, {
+    data: { datasets: buildDatasetList() },
+    options: {
+      responsive:          true,
+      maintainAspectRatio: false,
+      interaction: { mode: "nearest", intersect: true, axis: "xy" },
+
+      onHover(event, elements) {
+        if (!elements.length) { hideTradeTooltip(); canvas.style.cursor = "default"; return; }
+        const el  = elements[0];
+        const ds  = chart.data.datasets[el.datasetIndex];
+        if (ds._isMark) {
+          canvas.style.cursor = "pointer";
+          const pt = ds.data[el.index];
+          showTradeTooltip(event.native, pt.meta, ds._kind, chartBox);
+        } else {
+          hideTradeTooltip();
+          canvas.style.cursor = "crosshair";
+        }
+      },
+
+      plugins: {
+        legend: { display: false },
+
+        // Line chart tooltip (shown only for non-marker hover)
+        tooltip: {
+          filter: item => !chart.data.datasets[item.datasetIndex]._isMark,
+          mode:   "index",
+          intersect: false,
+          backgroundColor: "#1a1f2e",
+          borderColor:     "#252a35",
+          borderWidth:     1,
+          titleColor:      "#94a3b8",
+          bodyColor:       "#e2e8f0",
+          padding:         12,
+          itemSort: (a, b) => b.raw.y - a.raw.y,
+          callbacks: {
+            title: items => items[0]?.label ?? "",
+            label: item => {
+              const ds  = chart.data.datasets[item.datasetIndex];
+              const val = item.raw.y;
+              const pct = ((val / 10000) - 1) * 100;
+              const tag = ds._isStrat ? "●" : "·";
+              return `  ${tag} ${ds.label}: $${val.toLocaleString("en-US",{maximumFractionDigits:0})}  (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)`;
+            },
+          },
+        },
+      },
+
+      scales: {
+        x: {
+          type: "time",
+          time: { unit: "year", displayFormats: { year: "yyyy" } },
+          grid:   { color: "#1a1f2e" },
+          ticks:  { color: "#64748b", maxTicksLimit: 12 },
+          border: { color: "#252a35" },
+        },
+        y: {
+          type: "logarithmic",
+          position: "right",
+          grid:  { color: "#1a1f2e" },
+          ticks: {
+            color: "#64748b",
+            callback: val => {
+              // Show clean labels at powers of 10 and halves
+              const labels = [10000, 25000, 50000, 100000, 250000, 500000,
+                              1000000, 2500000, 5000000];
+              if (labels.includes(val)) {
+                if (val >= 1000000) return "$" + (val/1000000).toFixed(1) + "M";
+                if (val >= 1000)    return "$" + (val/1000).toFixed(0) + "k";
+                return "$" + val;
+              }
+              return null;
+            },
+          },
+          border: { color: "#252a35" },
+          min: 8000,
+        },
+      },
+      animation: { duration: 700, easing: "easeInOutQuart" },
+    },
+  });
+
+  buildLegend();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legend
+// ─────────────────────────────────────────────────────────────────────────────
 function buildLegend() {
   const el = document.getElementById("chart-legend");
-  el.innerHTML = "";
-  Object.entries(simData.tickers).forEach(([ticker, d]) => {
-    if (d.error || !activeTickers.has(ticker)) return;
+  el.innerHTML = `
+    <div class="legend-item">
+      <span class="legend-swatch solid" style="background:#22c55e"></span>
+      <span class="legend-label muted">Entry (triangle)</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-swatch solid" style="background:#ef4444"></span>
+      <span class="legend-label muted">Exit (diamond)</span>
+    </div>
+    <div class="legend-sep"></div>`;
+
+  Object.entries(simData.tickers).forEach(([tk, d]) => {
+    if (d.error || !activeTickers.has(tk)) return;
     el.innerHTML += `
       <div class="legend-item">
         <span class="legend-line solid" style="background:${d.colors.strat}"></span>
-        <span class="legend-label">${ticker} Strategy</span>
-        <span class="legend-line dashed" style="background:${d.colors.bh}"></span>
-        <span class="legend-label muted">${ticker} B&amp;H</span>
+        <span class="legend-label">${tk}</span>
+        <span class="legend-line dashed" style="border-color:${d.colors.bh}"></span>
+        <span class="legend-label muted">B&amp;H</span>
       </div>`;
   });
 }
 
-// ── Stats grid ────────────────────────────────────────────────────────────────
-function buildStats() {
-  updateStats();
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Stats cards
+// ─────────────────────────────────────────────────────────────────────────────
+function buildStats() { updateStats(); }
 
 function updateStats() {
   const grid = document.getElementById("stats-grid");
   grid.innerHTML = "";
-  Object.entries(simData.tickers).forEach(([ticker, d]) => {
+  Object.entries(simData.tickers).forEach(([tk, d]) => {
     if (d.error) return;
-    const s     = d.stats;
-    const dimmed = !activeTickers.has(ticker) ? "dimmed-card" : "";
-    const ratioCls = s.ratio >= 2 ? "good" : (s.ratio >= 1.5 ? "ok" : "poor");
-    const ddCls    = s.max_drawdown_pct < -30 ? "poor" : (s.max_drawdown_pct < -20 ? "ok" : "good");
+    const s      = d.stats;
+    const dimmed = !activeTickers.has(tk) ? "dimmed-card" : "";
+    const rCls   = s.ratio >= 2 ? "good" : (s.ratio >= 1.5 ? "ok" : "poor");
+    const ddCls  = s.max_drawdown_pct < -30 ? "poor" : (s.max_drawdown_pct < -20 ? "ok" : "good");
+    const wrCls  = s.win_rate >= 65 ? "good" : (s.win_rate >= 55 ? "ok" : "poor");
 
     grid.innerHTML += `
     <div class="stat-card ${dimmed}" style="--tc:${d.colors.strat}">
       <div class="stat-header">
-        <span class="stat-ticker">${ticker}</span>
-        <span class="stat-name">${TICKER_NAMES[ticker]}</span>
+        <span class="stat-ticker">${tk}</span>
+        <span class="stat-name">${TICKER_NAMES[tk]}</span>
       </div>
 
       <div class="stat-equity-row">
@@ -248,7 +406,7 @@ function updateStats() {
           <div class="stat-equity-val" style="color:${d.colors.bh}">$${s.bh_final_equity.toLocaleString()}</div>
           <div class="stat-equity-pct">+${s.bh_return_pct.toFixed(1)}%</div>
         </div>
-        <div class="stat-ratio-block ${ratioCls}">
+        <div class="stat-ratio-block ${rCls}">
           <div class="stat-ratio-val">${s.ratio.toFixed(2)}x</div>
           <div class="stat-ratio-lbl">outperf</div>
         </div>
@@ -264,8 +422,16 @@ function updateStats() {
           <span class="stat-metric-val">${s.sharpe.toFixed(2)}</span>
         </div>
         <div class="stat-metric">
+          <span class="stat-metric-lbl">Win Rate</span>
+          <span class="stat-metric-val ${wrCls}">${s.win_rate.toFixed(1)}%</span>
+        </div>
+        <div class="stat-metric">
           <span class="stat-metric-lbl">Trades/Year</span>
           <span class="stat-metric-val">${s.trades_per_year}</span>
+        </div>
+        <div class="stat-metric">
+          <span class="stat-metric-lbl">Avg Trade P&amp;L</span>
+          <span class="stat-metric-val ${s.avg_profit_pct >= 0 ? 'good' : 'poor'}">${s.avg_profit_pct >= 0 ? '+' : ''}${s.avg_profit_pct.toFixed(2)}%</span>
         </div>
         <div class="stat-metric">
           <span class="stat-metric-lbl">Total Trades</span>
@@ -276,12 +442,10 @@ function updateStats() {
   });
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────────
-// Chart.js needs the adapter for time scale
-const adapterScript = document.createElement("script");
-adapterScript.src = "https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js";
-adapterScript.onload = () => loadData();
-document.head.appendChild(adapterScript);
+// ─────────────────────────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────────────────────────
+loadData();
 </script>
 
 </body>
