@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Iter31 Signal Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="header-left">
+      <h1>Iter31 Signal Dashboard</h1>
+      <span class="subtitle">QQQ Ensemble Strategy — 6-Sub Voting System</span>
+    </div>
+    <div class="header-right">
+      <nav class="nav-links">
+        <a href="/" class="nav-link active">Signals</a>
+        <a href="/simulation" class="nav-link">Simulation</a>
+      </nav>
+      <span class="updated">Last updated: <strong id="updated-time">{{ data.generated_at }}</strong></span>
+      <button id="refresh-btn" onclick="refreshData()">↻ Refresh Data</button>
+    </div>
+  </header>
+
+  <!-- ── Ticker Cards Row ── -->
+  <div class="cards-row" id="cards-row">
+    {% for ticker, r in data.tickers.items() %}
+    {% if r.get('error') %}
+    <div class="card error-card">
+      <div class="card-ticker">{{ ticker }}</div>
+      <div class="card-error">Error: {{ r.error }}</div>
+    </div>
+    {% else %}
+    {% set sig = r.final %}
+    <div class="card {{ sig.lower() }}-card" data-ticker="{{ ticker }}">
+      <div class="card-ticker">{{ ticker }}</div>
+      <div class="card-price">${{ "{:,.2f}".format(r.close) }}</div>
+      <div class="card-change {{ 'positive' if r.day_chg >= 0 else 'negative' }}">
+        {{ "%+.2f"|format(r.day_chg) }}%
+      </div>
+      <div class="signal-badge {{ sig.lower() }}">{{ sig }}</div>
+      <div class="vote-tally">
+        {{ r.vote_long }}/6 long &nbsp;·&nbsp; {{ r.vote_short }}/6 short
+      </div>
+      <div class="as-of">as of {{ r.as_of }}</div>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  <!-- ── Detail Panels ── -->
+  <div class="details-container" id="details-container">
+    {% for ticker, r in data.tickers.items() %}
+    {% if not r.get('error') %}
+    {% set sig = r.final %}
+    <div class="detail-panel">
+
+      <!-- Panel header -->
+      <div class="panel-header {{ sig.lower() }}-header">
+        <span class="panel-title">{{ ticker }}</span>
+        <span class="panel-signal">{{ sig }}</span>
+        <span class="panel-votes">{{ r.vote_long }}/6 votes long</span>
+      </div>
+
+      <div class="panel-body">
+
+        <!-- Left: Regime + Indicators -->
+        <div class="panel-left">
+
+          <div class="section-title">Regime</div>
+          <table class="info-table">
+            <tr>
+              <td>Trend (SMA50 vs SMA200)</td>
+              <td class="{{ 'bull' if r.in_bull else 'bear' }}">
+                {{ "BULL" if r.in_bull else "BEAR" }}
+                ({{ "{:,.2f}".format(r.sma50) }} vs {{ "{:,.2f}".format(r.sma200) }})
+              </td>
+            </tr>
+            <tr>
+              <td>Price / SMA200</td>
+              <td>{{ "%.4f"|format(r.pv) }}
+                {% if r.pv < 1.06 %}<span class="tag bypass">MFI bypass zone</span>{% endif %}
+              </td>
+            </tr>
+            <tr>
+              <td>52-week drawdown</td>
+              <td class="{{ 'negative' if r.dd_yr < -15 else '' }}">{{ "%+.1f"|format(r.dd_yr) }}%</td>
+            </tr>
+            <tr>
+              <td>Genuine bear</td>
+              <td class="{{ 'bear' if r.genuine_bear else '' }}">{{ r.genuine_bear }}</td>
+            </tr>
+            <tr>
+              <td>Bear short active</td>
+              <td class="{{ 'bear' if r.bear_short else '' }}">{{ r.bear_short }}</td>
+            </tr>
+            <tr>
+              <td>Shallow recovery</td>
+              <td class="{{ 'bull' if r.shallow_rec else '' }}">{{ r.shallow_rec }}</td>
+            </tr>
+          </table>
+
+          <div class="section-title" style="margin-top:16px">Key Indicators</div>
+          <table class="info-table">
+            <tr>
+              <td>RSI(2)</td>
+              <td class="{{ 'oversold' if r.rsi2 < 10 else ('overbought' if r.rsi2 > 90 else '') }}">
+                {{ r.rsi2 }}
+                {% if r.rsi2 < 10 %}<span class="tag warn">extreme oversold</span>{% endif %}
+              </td>
+            </tr>
+            <tr>
+              <td>RSI(3)</td>
+              <td class="{{ 'overbought' if r.rsi3 > r.rsi3_thr else '' }}">
+                {{ r.rsi3 }}
+                <span class="dimmed">(exit &gt; {{ r.rsi3_thr }})</span>
+              </td>
+            </tr>
+            <tr>
+              <td>MFI(14)</td>
+              <td class="{{ 'overbought' if r.mfi > 63 else '' }}">
+                {{ r.mfi }}
+                {% if r.mfi > 63 %}<span class="tag warn">overbought vol</span>{% endif %}
+                <span class="dimmed">(exit &gt; 63 when pv≥1.06)</span>
+              </td>
+            </tr>
+            <tr>
+              <td>CMF(20)</td>
+              <td class="{{ 'negative' if r.cmf < 0 else 'positive' }}">{{ "%.4f"|format(r.cmf) }}</td>
+            </tr>
+            <tr>
+              <td>ADX(14)</td>
+              <td>{{ r.adx }}
+                &nbsp;<span class="dimmed">+DI={{ r.plus_di }} / -DI={{ r.minus_di }}</span>
+                {% if r.strong_up %}<span class="tag bull-tag">strong uptrend</span>{% endif %}
+              </td>
+            </tr>
+            <tr>
+              <td>Momentum 5-day</td>
+              <td class="{{ 'negative' if r.mom5 < -5 else ('positive' if r.mom5 > 0 else '') }}">
+                {{ "%+.2f"|format(r.mom5) }}%
+                {% if r.mom5 < -5 %}<span class="tag warn">dip trigger</span>{% endif %}
+              </td>
+            </tr>
+            <tr>
+              <td>Momentum 20-day</td>
+              <td class="{{ 'negative' if r.mom20 < 0 else 'positive' }}">{{ "%+.2f"|format(r.mom20) }}%</td>
+            </tr>
+            <tr>
+              <td>EMA13 &gt; EMA34</td>
+              <td class="{{ 'bull' if r.ema13_gt_ema34 else 'bear' }}">{{ r.ema13_gt_ema34 }}</td>
+            </tr>
+          </table>
+        </div>
+
+        <!-- Right: Sub-strategy votes -->
+        <div class="panel-right">
+          <div class="section-title">Sub-Strategy Votes</div>
+          <div class="votes-list">
+            {% for sub_id, sub in r.votes.items() %}
+            <div class="vote-row {{ 'vote-long' if sub.vote == 1 else ('vote-short' if sub.vote == -1 else 'vote-cash') }}">
+              <div class="vote-left">
+                <span class="vote-badge {{ 'vl' if sub.vote == 1 else ('vs' if sub.vote == -1 else 'vc') }}">
+                  {{ "LONG" if sub.vote == 1 else ("SHORT" if sub.vote == -1 else "CASH") }}
+                </span>
+                <span class="vote-label">Sub-{{ sub_id }}: {{ sub.label }}</span>
+              </div>
+              <div class="vote-reason">{{ sub.reason }}</div>
+            </div>
+            {% endfor %}
+          </div>
+
+          <!-- Final verdict -->
+          <div class="verdict {{ sig.lower() }}">
+            <span class="verdict-label">Final Signal</span>
+            <span class="verdict-signal">{{ sig }}</span>
+            <span class="verdict-rule">
+              {% if sig == "LONG" %}vote_long ≥ 5 → BUY at tomorrow's open
+              {% elif sig == "SHORT" %}vote_short ≥ 2 → SHORT at tomorrow's open
+              {% else %}neither threshold met → STAY IN CASH{% endif %}
+            </span>
+          </div>
+        </div>
+
+      </div><!-- panel-body -->
+    </div><!-- detail-panel -->
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  <footer>
+    <p>Strategy: Iter31 — 6-sub ensemble (Sub-A adaptive exit · Sub-B/D always long · Sub-C dip buyer · Sub-E adaptive MA · Sub-F MFI/volume)</p>
+    <p>LONG when ≥5/6 subs vote long &nbsp;|&nbsp; SHORT when ≥2/6 subs vote short &nbsp;|&nbsp; otherwise CASH</p>
+    <p style="color:#555">Not financial advice. For research purposes only.</p>
+  </footer>
+
+  <script>
+    function refreshData() {
+      const btn = document.getElementById('refresh-btn');
+      btn.textContent = '↻ Fetching...';
+      btn.disabled = true;
+
+      fetch('/api/refresh')
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById('updated-time').textContent = data.generated_at;
+          btn.textContent = '↻ Refresh Data';
+          btn.disabled = false;
+          // Full reload to re-render Jinja template
+          location.reload();
+        })
+        .catch(err => {
+          btn.textContent = '↻ Refresh Data';
+          btn.disabled = false;
+          alert('Refresh failed: ' + err);
+        });
+    }
+  </script>
+
+</body>
+</html>
