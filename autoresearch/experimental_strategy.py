@@ -433,6 +433,28 @@ class ExperimentalStrategy(BaseStrategy):
         super().__init__(allow_short=True)
         self._ohlcv_data = None  # loaded lazily
 
+    def _load_data(self) -> None:
+        """Override base: load from autoresearch OHLCV (up-to-date) instead of data/QQQ.csv."""
+        ticker = os.environ.get("STRATEGY_TICKER", "QQQ").upper()
+        ohlcv = _load_ohlcv(ticker)
+        # Map autoresearch columns to what base_strategy expects
+        col_map = {}
+        if "close_adj" in ohlcv.columns:
+            col_map["close_adj"] = "close"
+        if "open_adj" in ohlcv.columns:
+            col_map["open_adj"] = "open"
+        if "high_adj" in ohlcv.columns:
+            col_map["high_adj"] = "high"
+        if "low_adj" in ohlcv.columns:
+            col_map["low_adj"] = "low"
+        self._data = ohlcv.rename(columns=col_map).copy()
+        # Ensure numeric
+        for col in ["open", "close", "high", "low"]:
+            if col in self._data.columns and self._data[col].dtype == "object":
+                self._data[col] = pd.to_numeric(
+                    self._data[col].astype(str).str.replace(",", ""), errors="coerce"
+                )
+
     def _get_ohlcv(self) -> pd.DataFrame:
         ticker = os.environ.get("STRATEGY_TICKER", "QQQ").upper()
         # Invalidate cache if ticker has changed between runs
