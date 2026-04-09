@@ -30,25 +30,11 @@ When promoted:
 
 ## Iteration History
 
-### Pre-Autoresearch Strategies (no systematic evaluation)
-Exploratory single-indicator strategies before the ensemble framework.
-See `pre_iter_*.py` files in this folder.
-
-| File | Strategy | Notes |
-|------|----------|-------|
-| `pre_iter_sma_crossover_strategy.py` | SMA50/200 crossover | 2460% return, only ~10 trades/yr |
-| `pre_iter_rsi_strategy.py` | RSI mean-reversion | baseline mean-reversion |
-| `pre_iter_macd_strategy.py` | MACD crossover | standard momentum |
-| `pre_iter_ema_crossover_strategy.py` | EMA crossover | faster SMA variant |
-| `pre_iter_ensemble_strategy.py` | Early ensemble | pre-iteration ensemble attempt |
-| `pre_iter_bollinger_bands_strategy.py` | Bollinger Bands | volatility breakout |
-| `pre_iter_momentum_strategy.py` | Momentum | rate-of-change |
-| `pre_iter_donchian_channel_strategy.py` | Donchian Channel | breakout system |
-| `pre_iter_atr_breakout_strategy.py` | ATR Breakout | volatility-adjusted breakout |
-| `pre_iter_stochastic_strategy.py` | Stochastic | oscillator-based |
-| `pre_iter_trend_bounce_strategy.py` | Trend Bounce | pullback in trend |
-| `pre_iter_williams_r_strategy.py` | Williams %R | momentum oscillator |
-| `pre_iter_enhanced_sma_strategy.py` | Enhanced SMA | SMA with filters |
+### Pre-Autoresearch Strategies (removed — all inferior to Iter31)
+13 single-indicator strategies (SMA crossover, RSI, MACD, EMA, Bollinger, Momentum,
+Donchian, ATR Breakout, Stochastic, Trend Bounce, Williams %R, Enhanced SMA, early
+ensemble) were tested before the systematic iteration framework. All were strictly
+dominated by Iter31 and have been removed from the codebase.
 
 ---
 
