@@ -434,9 +434,13 @@ class ExperimentalStrategy(BaseStrategy):
         self._ohlcv_data = None  # loaded lazily
 
     def _load_data(self) -> None:
-        """Override base: load from autoresearch OHLCV (up-to-date) instead of data/QQQ.csv."""
-        ticker = os.environ.get("STRATEGY_TICKER", "QQQ").upper()
-        ohlcv = _load_ohlcv(ticker)
+        """Override base: load QQQ from autoresearch OHLCV (up-to-date) instead of data/QQQ.csv.
+
+        Always uses QQQ for signal generation (SMA, RSI, EMA, etc.) because the
+        strategy was tuned for QQQ's regime characteristics.  The backtest engine
+        separately uses each ticker's prices for trade execution.
+        """
+        ohlcv = _load_ohlcv("QQQ")
         # Map autoresearch columns to what base_strategy expects
         col_map = {}
         if "close_adj" in ohlcv.columns:
