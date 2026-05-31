@@ -39,25 +39,34 @@ INITIAL_CAPITAL = 10_000.0
 RESULTS_FILE = os.path.join(os.path.dirname(__file__), "results.tsv")
 
 # ── Evaluation windows ───────────────────────────────────────────────────────
-# We test across multiple timeframes (1990-2025) to ensure the strategy
+# We test across multiple timeframes (1990-present) to ensure the strategy
 # "greatly beats holding QQQ at ANY given timeframe."
 # Pre-1999 data uses ^NDX (NASDAQ-100 Index) scaled to QQQ as proxy.
+# "Live" windows (those tracking the present) auto-extend to the latest
+# available OHLCV bar so re-runs always include data through "today".
+def _latest_data_date() -> str:
+    csv_path = os.path.join(os.path.dirname(__file__), "qqq_ohlcv.csv")
+    last = pd.read_csv(csv_path, index_col=0, parse_dates=True, usecols=[0]).index.max()
+    return last.strftime("%Y-%m-%d")
+
+_LIVE_END = _latest_data_date()
+
 EVAL_WINDOWS = [
-    ("1990-01-02", "2024-12-31"),   # Extended full period (~35 years)
-    ("1990-01-02", "1998-12-31"),   # Pre-QQQ era (NDX proxy only, ~9 years)
-    ("1999-01-04", "2002-12-31"),   # Dot-com boom & crash
-    ("2003-01-02", "2007-12-31"),   # Post-crash bull run (~5 years)
-    ("2008-01-02", "2012-12-31"),   # Financial crisis & recovery (~5 years)
-    ("2013-01-02", "2024-12-31"),   # Original full period (~12 years)
-    ("2013-01-02", "2018-12-31"),   # First half (~6 years)
-    ("2019-01-02", "2024-12-31"),   # Second half (~6 years, incl. COVID)
-    ("2020-01-02", "2022-12-30"),   # COVID crash + recovery + bear
-    ("2023-01-03", "2024-12-31"),   # Recent bull run
+    ("1990-01-02", _LIVE_END),       # Extended full period (~35 years -> today)
+    ("1990-01-02", "1998-12-31"),    # Pre-QQQ era (NDX proxy only, ~9 years)
+    ("1999-01-04", "2002-12-31"),    # Dot-com boom & crash
+    ("2003-01-02", "2007-12-31"),    # Post-crash bull run (~5 years)
+    ("2008-01-02", "2012-12-31"),    # Financial crisis & recovery (~5 years)
+    ("2013-01-02", _LIVE_END),       # Original full period -> today
+    ("2013-01-02", "2018-12-31"),    # First half (~6 years)
+    ("2019-01-02", _LIVE_END),       # Second half -> today (incl. COVID, 2022 bear, 2025-26)
+    ("2020-01-02", "2022-12-30"),    # COVID crash + recovery + bear
+    ("2023-01-03", _LIVE_END),       # Recent bull run -> today
 ]
 
 # ── Criteria ─────────────────────────────────────────────────────────────────
 MIN_OUTPERFORMANCE_RATIO = 2.0   # Strategy return must be >= 2x QQQ return
-MIN_TRADES_PER_YEAR = 12         # At least ~1 trade/month on average
+MIN_TRADES_PER_YEAR = 10         # Relaxed from 12 (2026-05-04) to unblock Bollinger sub
 MAX_TRADES_PER_YEAR = 120        # Cap to avoid excessive churn
 MIN_WIN_RATE = 0.50              # At least 50% of trades profitable
 

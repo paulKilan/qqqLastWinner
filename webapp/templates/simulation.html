@@ -12,22 +12,57 @@
   <!-- ── Header ── -->
   <header>
     <div class="header-left">
-      <h1>Iter31 Signal Dashboard</h1>
-      <span class="subtitle">QQQ Ensemble Strategy — 6-Sub Voting System</span>
+      <h1>QQQ Signal Dashboard</h1>
+      <span class="subtitle">{{ selected_strategy_meta.label if selected_strategy_meta else 'Iter31 Ensemble' }}</span>
     </div>
     <div class="header-right">
       <nav class="nav-links">
         <a href="/" class="nav-link">Signals</a>
         <a href="/simulation" class="nav-link active">Simulation</a>
+        <a href="/research" class="nav-link">Research</a>
       </nav>
+      <label class="strategy-picker">
+        <span>Strategy:</span>
+        <select id="strategy-select" onchange="onStrategyChange(this.value)">
+          {% for group_title, group_strategies in strategy_groups %}
+          <optgroup label="{{ group_title }}">
+            {% for s in group_strategies %}
+            <option value="{{ s.id }}" {% if s.id == selected_strategy %}selected{% endif %}>{{ s.label }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+      </label>
+      <button id="refresh-btn" onclick="refreshSimulation()">↻ Refresh Data</button>
     </div>
   </header>
+
+  <script>
+    function onStrategyChange(sid) {
+      const sel = document.getElementById('strategy-select');
+      if (sel) sel.disabled = true;
+      const url = new URL(window.location.href);
+      url.searchParams.set('strategy', sid);
+      window.location.href = url.toString();
+    }
+    window.__STRATEGY_ID__ = "{{ selected_strategy }}";
+
+    async function refreshSimulation() {
+      const btn = document.getElementById('refresh-btn');
+      btn.disabled = true;
+      btn.textContent = '↻ Refreshing…';
+      try {
+        await fetch('/api/refresh?strategy=' + encodeURIComponent(window.__STRATEGY_ID__ || 'iter31'));
+      } catch (e) { /* reload anyway so user sees a fresh state */ }
+      window.location.reload();
+    }
+  </script>
 
   <!-- ── Page intro ── -->
   <div class="sim-intro">
     <div class="sim-intro-text">
-      <h2>Strategy vs Buy &amp; Hold &nbsp;·&nbsp; <span id="date-range">2013 – today</span></h2>
-      <p>$10,000 starting capital &nbsp;·&nbsp; Iter31 ensemble strategy vs passive buy-and-hold &nbsp;·&nbsp; Log scale
+      <h2>Strategy vs Buy &amp; Hold &nbsp;·&nbsp; <span id="date-range">2007 – today</span></h2>
+      <p>$10,000 starting capital &nbsp;·&nbsp; {{ selected_strategy_meta.label if selected_strategy_meta else 'Iter31' }} vs passive buy-and-hold &nbsp;·&nbsp; Log scale
         &nbsp;<span id="refreshed-note" style="display:none" class="refreshed-tag"></span>
       </p>
     </div>
@@ -79,7 +114,7 @@
   <div class="stats-grid" id="stats-grid"></div>
 
   <footer>
-    <p>Strategy: Iter31 — 6-sub ensemble · $10,000 starting capital · <span id="footer-range">2013-01-02 to today</span></p>
+    <p>Strategy: {{ selected_strategy_meta.label if selected_strategy_meta else 'Iter31' }} · $10,000 starting capital · <span id="footer-range">2007-01-03 to today</span></p>
     <p style="color:#555">Not financial advice. For research purposes only.</p>
   </footer>
 
@@ -100,7 +135,7 @@ let activeTickers = new Set(["QQQ","SPY","NVDA","TSLA","GOOGL"]);
 let activeRange   = "all";   // current range-btn selection
 let isZoomed      = false;   // true once user has zoomed/panned
 
-let FULL_START = "2013-01-02";
+let FULL_START = "2007-01-03";
 let FULL_END   = new Date().toISOString().slice(0, 10);   // filled from API
 
 const TICKER_NAMES = {
@@ -112,7 +147,7 @@ const TICKER_NAMES = {
 // Fetch + boot
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadData() {
-  const res = await fetch("/api/simulation");
+  const res = await fetch("/api/simulation?strategy=" + encodeURIComponent(window.__STRATEGY_ID__ || "iter31"));
   simData   = await res.json();
 
   // Update date range from API response
@@ -121,7 +156,8 @@ async function loadData() {
 
   // Update header date range label
   const endLabel = new Date(FULL_END).toLocaleDateString("en-US", {month:"short", day:"numeric", year:"numeric"});
-  document.getElementById("date-range").textContent = `2013 – ${endLabel}`;
+  const startLabel = new Date(FULL_START).getFullYear();
+  document.getElementById("date-range").textContent = `${startLabel} – ${endLabel}`;
 
   // Show refresh notice if data was auto-refreshed
   if (simData.refreshed && simData.refreshed.length > 0) {
@@ -211,6 +247,7 @@ function applyRange(range) {
 
   chart.zoomScale("x", { min: startDt.getTime(), max: endDt.getTime() }, "active");
   isZoomed = true;
+  fitYToVisibleRange();
   updateResetBtn();
 }
 
@@ -218,6 +255,10 @@ function resetZoom() {
   chart.resetZoom("active");
   isZoomed = false;
   activeRange = "all";
+  // Restore the full-range Y bounds (hardcoded min, no max)
+  chart.options.scales.y.min = 8000;
+  chart.options.scales.y.max = undefined;
+  chart.update("none");
   document.querySelectorAll(".range-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.range === "all")
   );
@@ -228,7 +269,33 @@ function onZoom() {
   isZoomed = true;
   // Deselect range buttons when user manually zooms
   document.querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+  fitYToVisibleRange();
   updateResetBtn();
+}
+
+// When zoomed into a sub-range, recompute Y min/max from the data actually
+// visible. Otherwise the log axis spans the whole 19y curve and the in-window
+// variation looks flat. Walks every active strategy + buy-and-hold series.
+function fitYToVisibleRange() {
+  if (!chart || !simData) return;
+  const xScale = chart.scales.x;
+  const xMin = xScale.min, xMax = xScale.max;
+  let yMin = Infinity, yMax = -Infinity;
+  Object.entries(simData.tickers).forEach(([tk, d]) => {
+    if (d.error || !activeTickers.has(tk)) return;
+    for (let i = 0; i < d.dates.length; i++) {
+      const t = new Date(d.dates[i]).getTime();
+      if (t < xMin || t > xMax) continue;
+      const a = d.strat_equity[i], b = d.bh_equity[i];
+      if (a < yMin) yMin = a;  if (a > yMax) yMax = a;
+      if (b < yMin) yMin = b;  if (b > yMax) yMax = b;
+    }
+  });
+  if (!isFinite(yMin) || !isFinite(yMax) || yMin <= 0) return;
+  const pad = 1.06;
+  chart.options.scales.y.min = yMin / pad;
+  chart.options.scales.y.max = yMax * pad;
+  chart.update("none");
 }
 
 function updateResetBtn() {
@@ -448,13 +515,20 @@ function buildChart() {
           grid:     { color: "#1a1f2e" },
           ticks: {
             color: "#64748b",
+            // Render a clean $-formatted label for whatever ticks Chart.js
+            // picks on the log scale — works at any zoom level.
             callback: val => {
-              const labels = [10000,25000,50000,100000,250000,500000,
-                              1000000,2500000,5000000];
-              if (!labels.includes(val)) return null;
-              if (val >= 1000000) return "$" + (val/1000000).toFixed(1) + "M";
-              if (val >= 1000)    return "$" + (val/1000).toFixed(0) + "k";
-              return "$" + val;
+              const v = Number(val);
+              if (!isFinite(v) || v <= 0) return null;
+              // Only label "round" log values (1, 2, 2.5, 5 × 10^n) to
+              // avoid clutter from interpolated minor ticks.
+              const exp = Math.floor(Math.log10(v));
+              const m   = v / Math.pow(10, exp);
+              const isRound = [1, 2, 2.5, 5].some(r => Math.abs(m - r) < 0.05);
+              if (!isRound) return null;
+              if (v >= 1e6) return "$" + (v/1e6).toFixed(v >= 1e7 ? 0 : 1) + "M";
+              if (v >= 1e3) return "$" + (v/1e3).toFixed(0) + "k";
+              return "$" + v.toFixed(0);
             },
           },
           border: { color: "#252a35" },

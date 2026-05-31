@@ -16,17 +16,13 @@ import numpy as np
 from autoresearch.run_experiment import load_strategy, run_backtest
 from autoresearch.prepare import rolling_benchmarks, load_prices
 
-TICKERS        = ["QQQ", "SPY", "NVDA", "TSLA", "GOOGL"]
-START          = "2013-01-02"
+TICKERS        = ["QQQ"]
+START          = "2007-01-03"  # Long-horizon view; data goes back further but 2007 captures GFC + every cycle since
 INITIAL        = 10_000.0
 STALE_DAYS     = 5   # refresh data if last row is older than this many calendar days
 
 COLORS = {
     "QQQ":   {"strat": "#3b82f6", "bh": "#93c5fd", "buy": "#22c55e", "sell": "#ef4444"},
-    "SPY":   {"strat": "#22c55e", "bh": "#86efac", "buy": "#22c55e", "sell": "#ef4444"},
-    "NVDA":  {"strat": "#a855f7", "bh": "#d8b4fe", "buy": "#22c55e", "sell": "#ef4444"},
-    "TSLA":  {"strat": "#f97316", "bh": "#fdba74", "buy": "#22c55e", "sell": "#ef4444"},
-    "GOOGL": {"strat": "#ef4444", "bh": "#fca5a5", "buy": "#22c55e", "sell": "#ef4444"},
 }
 
 
@@ -129,8 +125,9 @@ def _is_stale(ticker: str) -> bool:
     return (date.today() - last).days > STALE_DAYS
 
 
-def get_simulation_data() -> dict:
+def get_simulation_data(strategy_id: str = "iter31") -> dict:
     from datetime import date
+    from webapp.strategy_registry import find_strategy, instantiate_strategy
     end_date = date.today().strftime("%Y-%m-%d")
 
     # Auto-refresh any ticker whose data is stale
@@ -142,17 +139,31 @@ def get_simulation_data() -> dict:
             if ok:
                 refreshed.append(ticker)
 
-    result = {"tickers": {}, "start": START, "end": end_date, "refreshed": refreshed}
+    strategy_spec = find_strategy(strategy_id)
+    result = {
+        "tickers": {}, "start": START, "end": end_date, "refreshed": refreshed,
+        "strategy": {
+            "id": strategy_spec["id"], "label": strategy_spec["label"],
+            "source": strategy_spec["source"], "description": strategy_spec["description"],
+        },
+    }
 
     for ticker in TICKERS:
         os.environ["STRATEGY_TICKER"] = ticker.upper()
 
-        from autoresearch.experimental_strategy import _OHLCV_CACHE
-        _OHLCV_CACHE.clear()
+        # Clear any cached OHLCV in both strategy classes so a fresh strategy
+        # picks up the latest data.
+        try:
+            from autoresearch.experimental_strategy import _OHLCV_CACHE
+            _OHLCV_CACHE.clear()
+        except Exception:
+            pass
 
-        strategy = load_strategy("autoresearch.experimental_strategy", "ExperimentalStrategy")
-        strategy._ohlcv_data   = None
-        strategy._ohlcv_ticker = None
+        strategy = instantiate_strategy(strategy_spec, ticker=ticker)
+        # Reset any per-ticker caches the strategy might hold
+        for attr in ("_ohlcv_data", "_ohlcv_ticker"):
+            if hasattr(strategy, attr):
+                setattr(strategy, attr, None)
 
         try:
             trades_df, equity_df, _ = run_backtest(strategy, START, end_date, ticker=ticker)

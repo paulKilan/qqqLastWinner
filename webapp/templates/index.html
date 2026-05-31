@@ -11,14 +11,27 @@
   <!-- ── Header ── -->
   <header>
     <div class="header-left">
-      <h1>Iter31 Signal Dashboard</h1>
-      <span class="subtitle">QQQ Ensemble Strategy — 6-Sub Voting System</span>
+      <h1>QQQ Signal Dashboard</h1>
+      <span class="subtitle">{{ data.strategy.label if data.strategy else 'Iter31 Ensemble' }}</span>
     </div>
     <div class="header-right">
       <nav class="nav-links">
         <a href="/" class="nav-link active">Signals</a>
         <a href="/simulation" class="nav-link">Simulation</a>
+        <a href="/research" class="nav-link">Research</a>
       </nav>
+      <label class="strategy-picker">
+        <span>Strategy:</span>
+        <select id="strategy-select" onchange="onStrategyChange(this.value)">
+          {% for group_title, group_strategies in strategy_groups %}
+          <optgroup label="{{ group_title }}">
+            {% for s in group_strategies %}
+            <option value="{{ s.id }}" {% if s.id == selected_strategy %}selected{% endif %}>{{ s.label }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+      </label>
       <span class="updated">Last updated: <strong id="updated-time">{{ data.generated_at }}</strong></span>
       <button id="refresh-btn" onclick="refreshData()">↻ Refresh Data</button>
     </div>
@@ -41,19 +54,191 @@
         {{ "%+.2f"|format(r.day_chg) }}%
       </div>
       <div class="signal-badge {{ sig.lower() }}">{{ sig }}</div>
+      {% if not r.get('is_generic') %}
       <div class="vote-tally">
         {{ r.vote_long }}/6 long &nbsp;·&nbsp; {{ r.vote_short }}/6 short
       </div>
+      {% else %}
+      <div class="vote-tally">strategy: {{ r.strategy_label[:28] }}{% if r.strategy_label|length > 28 %}…{% endif %}</div>
+      {% endif %}
       <div class="as-of">as of {{ r.as_of }}</div>
     </div>
     {% endif %}
     {% endfor %}
   </div>
 
+  <!-- ── Strategy Equity Chart (all strategies, 2007 → present) ── -->
+  {% for ticker, r in data.tickers.items() %}
+  {% if r.get('chart') and r.chart.dates %}
+  <div class="generic-panel chart-panel" style="margin: 20px 28px;">
+    <h3>{{ ticker }} Strategy vs Buy &amp; Hold · {{ r.chart.dates[0] }} → {{ r.chart.dates[-1] }} · $10,000 starting capital</h3>
+
+    <!-- Range presets + zoom controls -->
+    <div class="chart-toolbar" style="display:flex; justify-content:space-between; align-items:center; margin: 6px 0 10px;">
+      <div class="range-btns" data-target="strategy-price-chart">
+        <button class="range-btn" data-range="1M">1M</button>
+        <button class="range-btn" data-range="3M">3M</button>
+        <button class="range-btn" data-range="6M">6M</button>
+        <button class="range-btn" data-range="1Y">1Y</button>
+        <button class="range-btn" data-range="3Y">3Y</button>
+        <button class="range-btn" data-range="5Y">5Y</button>
+        <button class="range-btn active" data-range="all">All</button>
+      </div>
+      <div class="zoom-hint" style="font-size:12px; color:#94a3b8;">
+        Scroll = zoom · Drag = pan · Double-click = reset
+      </div>
+    </div>
+
+    <div style="position: relative; height: 460px;">
+      <canvas id="strategy-price-chart" data-chart='{{ r.chart | tojson }}'></canvas>
+    </div>
+    <div class="chart-legend">
+      <span class="legend-item"><span class="dot strat"></span>Strategy equity</span>
+      <span class="legend-item"><span class="dash bh"></span>Buy &amp; Hold</span>
+      <span class="legend-item"><span class="marker entry">▲</span>Long entry</span>
+      <span class="legend-item"><span class="marker short">▼</span>Short entry</span>
+      <span class="legend-item"><span class="marker exit win">●</span>Exit (profit)</span>
+      <span class="legend-item"><span class="marker exit loss">●</span>Exit (loss)</span>
+      <span class="legend-item" id="chart-trade-stats" style="margin-left:auto; color:#94a3b8;"></span>
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {% if data.strategy and data.strategy.source != 'iter31' %}
+  <!-- ── Generic Strategy Info Banner ── -->
+  <div class="strategy-info">
+    <h2>{{ data.strategy.label }}</h2>
+    <p>{{ data.strategy.description }}</p>
+  </div>
+
+  <!-- ── Non-Iter31 Detail Panel ── -->
+  {% for ticker, r in data.tickers.items() %}
+  {% if r.get('is_generic') and not r.get('error') %}
+  <div class="generic-detail">
+
+    <!-- Top stats row -->
+    <div class="generic-stats">
+      {% if r.metrics %}
+      <div class="generic-stat">
+        <div class="generic-stat-label">Composite Score</div>
+        <div class="generic-stat-value">{{ "%.1f"|format(r.metrics.score) }}</div>
+      </div>
+      <div class="generic-stat">
+        <div class="generic-stat-label">Mean Return</div>
+        <div class="generic-stat-value">{{ "{:,.0f}%".format(r.metrics.mean_return_pct) }}</div>
+      </div>
+      <div class="generic-stat">
+        <div class="generic-stat-label">Sharpe</div>
+        <div class="generic-stat-value">{{ "%.2f"|format(r.metrics.mean_sharpe) }}</div>
+      </div>
+      <div class="generic-stat">
+        <div class="generic-stat-label">Outperf vs QQQ</div>
+        <div class="generic-stat-value">{{ "%.2f"|format(r.metrics.mean_outperf) }}x</div>
+      </div>
+      <div class="generic-stat">
+        <div class="generic-stat-label">Min Ratio</div>
+        <div class="generic-stat-value">{{ "%.3f"|format(r.metrics.min_ratio) }}</div>
+      </div>
+      <div class="generic-stat">
+        <div class="generic-stat-label">Mean Max DD</div>
+        <div class="generic-stat-value">{{ "%.1f"|format(r.metrics.mean_max_dd_pct) }}%</div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="generic-grid">
+
+      <!-- LEFT: regime + position mix -->
+      <div class="generic-panel">
+        <h3>Current Market Regime</h3>
+        <table class="generic-table">
+          <tr><td>Trend (SMA50 vs SMA200)</td>
+              <td class="{{ 'bull' if r.regime.in_bull else 'bear' }}">
+                {{ "BULL" if r.regime.in_bull else "BEAR" }}
+                {% if r.regime.sma50 and r.regime.sma200 %}
+                ({{ "{:,.2f}".format(r.regime.sma50) }} vs {{ "{:,.2f}".format(r.regime.sma200) }})
+                {% endif %}
+              </td></tr>
+          <tr><td>RSI(2)</td>
+              <td class="{{ 'oversold' if r.regime.rsi2 < 10 else ('overbought' if r.regime.rsi2 > 90 else '') }}">{{ r.regime.rsi2 }}</td></tr>
+          <tr><td>RSI(14)</td>
+              <td class="{{ 'oversold' if r.regime.rsi14 < 30 else ('overbought' if r.regime.rsi14 > 70 else '') }}">{{ r.regime.rsi14 }}</td></tr>
+          <tr><td>Momentum 5-day</td>
+              <td class="{{ 'positive' if r.regime.mom5 >= 0 else 'negative' }}">{{ "%+.2f"|format(r.regime.mom5) }}%</td></tr>
+          <tr><td>Momentum 20-day</td>
+              <td class="{{ 'positive' if r.regime.mom20 >= 0 else 'negative' }}">{{ "%+.2f"|format(r.regime.mom20) }}%</td></tr>
+          <tr><td>1-year drawdown</td>
+              <td class="{{ 'negative' if r.regime.dd_yr < -15 else '' }}">{{ "%+.2f"|format(r.regime.dd_yr) }}%</td></tr>
+        </table>
+
+        <h3>Position History (last {{ r.position_mix.window_years }}y)</h3>
+        <div class="position-mix-bar">
+          <div class="mix-segment mix-long" style="width: {{ r.position_mix.long_pct }}%" title="Long {{ r.position_mix.long_pct }}%"></div>
+          <div class="mix-segment mix-short" style="width: {{ r.position_mix.short_pct }}%" title="Short {{ r.position_mix.short_pct }}%"></div>
+          <div class="mix-segment mix-cash" style="width: {{ r.position_mix.cash_pct }}%" title="Cash {{ r.position_mix.cash_pct }}%"></div>
+        </div>
+        <div class="position-mix-legend">
+          <span class="legend-item"><span class="dot long"></span>Long {{ r.position_mix.long_pct }}%</span>
+          <span class="legend-item"><span class="dot short"></span>Short {{ r.position_mix.short_pct }}%</span>
+          <span class="legend-item"><span class="dot cash"></span>Cash {{ r.position_mix.cash_pct }}%</span>
+        </div>
+        <p class="dim">In current position for <strong>{{ r.days_in_position }} day{{ '' if r.days_in_position == 1 else 's' }}</strong>.</p>
+      </div>
+
+      <!-- RIGHT: recent transitions + architecture summary -->
+      <div class="generic-panel">
+        <h3>Recent Position Changes</h3>
+        {% if r.recent_transitions %}
+        <table class="generic-table">
+          <thead><tr><th>Date</th><th>From → To</th><th>Close</th></tr></thead>
+          <tbody>
+          {% for t in r.recent_transitions %}
+            <tr>
+              <td class="ts">{{ t.date }}</td>
+              <td><span class="signal-pill {{ t.from|lower }}">{{ t.from }}</span> → <span class="signal-pill {{ t.to|lower }}">{{ t.to }}</span></td>
+              <td>{% if t.close %}${{ "{:,.2f}".format(t.close) }}{% else %}—{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="dim">No position changes in the last 5 years (always-on or never-on).</p>
+        {% endif %}
+
+        <h3>Strategy Architecture</h3>
+        <div class="active-subs-display">
+          {% for sub in "ABCDEFGHIJKL" %}
+            <span class="sub-chip-display {{ 'on' if sub in r.active_subs else 'off' }}">{{ sub }}</span>
+          {% endfor %}
+        </div>
+        <p class="dim">{{ r.active_subs|length }} of 12 sub-strategies active.</p>
+
+        <h3>Param Diffs vs Iter31 ({{ r.n_diffs }})</h3>
+        {% if r.diffs %}
+        <details>
+          <summary>Show all {{ r.n_diffs }} differences</summary>
+          <table class="diff-table-detail">
+            {% for d in r.diffs %}
+            <tr><td>{{ d.key }}</td><td class="prev">{{ d.iter31 }}</td><td class="arrow">→</td><td class="curr">{{ d.current }}</td></tr>
+            {% endfor %}
+          </table>
+        </details>
+        {% else %}
+        <p class="dim">Identical to Iter31 defaults.</p>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+
   <!-- ── Detail Panels ── -->
   <div class="details-container" id="details-container">
     {% for ticker, r in data.tickers.items() %}
-    {% if not r.get('error') %}
+    {% if not r.get('error') and not r.get('is_generic') %}
     {% set sig = r.final %}
     <div class="detail-panel">
 
@@ -191,18 +376,32 @@
   </div>
 
   <footer>
+    {% if not data.strategy or data.strategy.source == 'iter31' %}
     <p>Strategy: Iter31 — 6-sub ensemble (Sub-A adaptive exit · Sub-B/D always long · Sub-C dip buyer · Sub-E adaptive MA · Sub-F MFI/volume)</p>
     <p>LONG when ≥5/6 subs vote long &nbsp;|&nbsp; SHORT when ≥2/6 subs vote short &nbsp;|&nbsp; otherwise CASH</p>
+    {% else %}
+    <p>Strategy: {{ data.strategy.label }}</p>
+    <p>For full ensemble structure (12 subs, votes, regime gates) see the <a href="/research" style="color:#888">Research</a> page.</p>
+    {% endif %}
     <p style="color:#555">Not financial advice. For research purposes only.</p>
   </footer>
 
   <script>
+    function onStrategyChange(sid) {
+      const sel = document.getElementById('strategy-select');
+      if (sel) sel.disabled = true;
+      const url = new URL(window.location.href);
+      url.searchParams.set('strategy', sid);
+      window.location.href = url.toString();
+    }
+
     function refreshData() {
       const btn = document.getElementById('refresh-btn');
       btn.textContent = '↻ Fetching...';
       btn.disabled = true;
 
-      fetch('/api/refresh')
+      const sid = document.getElementById('strategy-select') ? document.getElementById('strategy-select').value : 'iter31';
+      fetch('/api/refresh?strategy=' + encodeURIComponent(sid))
         .then(r => r.json())
         .then(data => {
           document.getElementById('updated-time').textContent = data.generated_at;
@@ -217,6 +416,215 @@
           alert('Refresh failed: ' + err);
         });
     }
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <script>
+    (function() {
+      const canvas = document.getElementById('strategy-price-chart');
+      if (!canvas) return;
+      const data = JSON.parse(canvas.dataset.chart);
+
+      // ---- Sanity check: every entry should have a matched exit -----------
+      const entries = data.markers.filter(m => m.kind === 'entry-long' || m.kind === 'entry-short');
+      const exits   = data.markers.filter(m => m.kind === 'exit');
+      const winRate = exits.length ? (exits.filter(m => m.profitable).length / exits.length * 100) : 0;
+      const statsEl = document.getElementById('chart-trade-stats');
+      if (statsEl) {
+        const pairStatus = entries.length === exits.length
+          ? `${entries.length} trades · ${winRate.toFixed(1)}% wins`
+          : `⚠ ${entries.length} entries / ${exits.length} exits — mismatch!`;
+        statsEl.textContent = pairStatus;
+      }
+
+      // ---- Convert daily ISO strings to ms timestamps for time axis -------
+      const xs    = data.dates.map(d => new Date(d + 'T00:00:00').getTime());
+      const lineStrat = xs.map((x, i) => ({ x, y: data.strat_equity[i] }));
+      const lineBH    = xs.map((x, i) => ({ x, y: data.bh_equity[i]   }));
+
+      // ---- Marker datasets ------------------------------------------------
+      const markerStyle = {
+        'entry-long':  { color: '#22c55e', symbol: 'triangle', label: 'Long entry'   },
+        'entry-short': { color: '#ef4444', symbol: 'triangle', label: 'Short entry'  },
+        'exit-win':    { color: '#22c55e', symbol: 'circle',   label: 'Exit (profit)'},
+        'exit-loss':   { color: '#ef4444', symbol: 'circle',   label: 'Exit (loss)'  },
+      };
+      function bucketKind(m) {
+        if (m.kind === 'exit') return m.profitable ? 'exit-win' : 'exit-loss';
+        return m.kind;
+      }
+      const markerDatasets = Object.keys(markerStyle).map(kind => {
+        const ms = markerStyle[kind];
+        const items = data.markers.filter(m => bucketKind(m) === kind);
+        return {
+          label: ms.label,
+          data: items.map(m => ({
+            x: new Date(m.x + 'T00:00:00').getTime(),
+            y: m.y,
+            _meta: m,
+          })),
+          showLine: false,
+          pointStyle: ms.symbol,
+          pointBackgroundColor: ms.color,
+          pointBorderColor: '#0d0f14',
+          pointBorderWidth: 1,
+          pointRadius: 4,
+          pointHoverRadius: 7,
+          rotation: kind === 'entry-short' ? 180 : 0,
+          order: 0,
+        };
+      });
+
+      const ctx = canvas.getContext('2d');
+      const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          datasets: [
+            {
+              label: 'Strategy equity', data: lineStrat,
+              borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.10)',
+              pointRadius: 0, borderWidth: 2.2, tension: 0.1, fill: true, order: 2,
+            },
+            {
+              label: 'Buy & Hold', data: lineBH,
+              borderColor: '#93c5fd', borderDash: [4, 4],
+              pointRadius: 0, borderWidth: 1.4, tension: 0.1, fill: false, order: 3,
+            },
+            ...markerDatasets,
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'nearest', intersect: true },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#1a1f2e', borderColor: '#252a35', borderWidth: 1,
+              titleColor: '#e2e8f0', bodyColor: '#e2e8f0', padding: 10,
+              callbacks: {
+                title: (items) => {
+                  if (!items.length) return '';
+                  const d = new Date(items[0].parsed.x);
+                  return d.toISOString().slice(0, 10);
+                },
+                label: (ctx) => {
+                  const ds = ctx.dataset.label || '';
+                  const m  = ctx.raw && ctx.raw._meta;
+                  if (m) {
+                    if (m.kind === 'exit') {
+                      const sign = m.pnl_pct >= 0 ? '+' : '';
+                      return `${ds} — ${m.side.toUpperCase()} held ${m.duration}d · ` +
+                             `entry ${m.entry_date} @ $${m.entry_price} → exit @ $${m.exit_price} · ` +
+                             `P&L ${sign}${m.pnl_pct.toFixed(2)}% (${sign}$${m.pnl_abs.toFixed(0)})`;
+                    } else {
+                      return `${ds} @ $${m.entry_price} · equity $${m.entry_equity.toLocaleString()}`;
+                    }
+                  }
+                  const v = ctx.parsed.y;
+                  if (typeof v !== 'number') return ds;
+                  return ds + ': $' + v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+                },
+              }
+            },
+            zoom: {
+              pan:  { enabled: true, mode: 'x', modifierKey: null,
+                      onPanComplete: ({chart}) => fitYToVisibleRange(chart) },
+              zoom: { wheel: { enabled: true, speed: 0.1 }, pinch: { enabled: true }, mode: 'x',
+                      onZoomComplete: ({chart}) => fitYToVisibleRange(chart) },
+              limits: { x: { min: xs[0], max: xs[xs.length - 1] } },
+            }
+          },
+          scales: {
+            x: {
+              type: 'time',
+              time: { displayFormats: { day: 'MMM d', month: 'MMM yy', year: 'yyyy' } },
+              ticks: { color: '#94a3b8', maxRotation: 0, autoSkipPadding: 28 },
+              grid:  { color: 'rgba(37,42,53,0.4)' },
+            },
+            y: {
+              type: 'logarithmic',
+              position: 'right',
+              ticks: {
+                color: '#94a3b8',
+                callback: (v) => {
+                  if (v >= 1e6) return '$' + (v/1e6).toFixed(1) + 'M';
+                  if (v >= 1e3) return '$' + (v/1e3).toFixed(0) + 'k';
+                  return '$' + Number(v).toFixed(0);
+                },
+              },
+              grid: { color: 'rgba(37,42,53,0.4)' },
+            }
+          }
+        }
+      });
+
+      // ---- Auto-fit Y to the visible X range ------------------------------
+      // Log-scale charts that span 4 orders of magnitude (e.g. $10k → $2M)
+      // look flat when zoomed into a single month because the line's
+      // intrinsic variation is tiny compared to the axis span. Recompute
+      // Y min/max from the data actually visible in the current X window.
+      function fitYToVisibleRange(chart) {
+        const xScale = chart.scales.x;
+        const xMin = xScale.min, xMax = xScale.max;
+        // Binary-search for the slice of xs inside [xMin, xMax]
+        let lo = 0, hi = xs.length - 1;
+        while (lo < xs.length && xs[lo] < xMin) lo++;
+        while (hi >= 0          && xs[hi] > xMax) hi--;
+        if (hi < lo) { return; }  // empty window — leave axis alone
+        let yMin = Infinity, yMax = -Infinity;
+        for (let i = lo; i <= hi; i++) {
+          const a = data.strat_equity[i], b = data.bh_equity[i];
+          if (a < yMin) yMin = a;  if (a > yMax) yMax = a;
+          if (b < yMin) yMin = b;  if (b > yMax) yMax = b;
+        }
+        if (!isFinite(yMin) || !isFinite(yMax) || yMin <= 0) return;
+        // Add 4% padding on each side, on log scale (multiplicative)
+        const pad = 1.04;
+        chart.options.scales.y.min = yMin / pad;
+        chart.options.scales.y.max = yMax * pad;
+        chart.update('none');
+      }
+
+      // ---- Range presets --------------------------------------------------
+      const last = xs[xs.length - 1];
+      const RANGES = { '1M': 30, '3M': 91, '6M': 182, '1Y': 365, '3Y': 365*3, '5Y': 365*5 };
+      function applyRange(range) {
+        if (range === 'all') {
+          chart.resetZoom();
+          // Reset Y bounds so the full-range view fills the canvas
+          chart.options.scales.y.min = undefined;
+          chart.options.scales.y.max = undefined;
+          chart.update('none');
+        } else {
+          const days = RANGES[range];
+          const start = last - days * 24 * 3600 * 1000;
+          chart.zoomScale('x', { min: Math.max(start, xs[0]), max: last }, 'default');
+          fitYToVisibleRange(chart);
+        }
+      }
+      document.querySelectorAll('.range-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          applyRange(btn.dataset.range);
+        });
+      });
+
+      // Double-click resets zoom (matches simulation page convention)
+      canvas.addEventListener('dblclick', () => {
+        chart.resetZoom();
+        chart.options.scales.y.min = undefined;
+        chart.options.scales.y.max = undefined;
+        chart.update('none');
+        document.querySelectorAll('.range-btn').forEach(b =>
+          b.classList.toggle('active', b.dataset.range === 'all'));
+      });
+    })();
   </script>
 
 </body>
