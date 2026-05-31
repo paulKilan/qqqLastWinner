@@ -17,7 +17,7 @@ import pandas as pd
 import numpy as np
 
 AUTORESEARCH_DIR = os.path.join(ROOT_DIR, "autoresearch")
-TICKERS = ["QQQ", "SPY", "NVDA", "TSLA", "GOOGL"]
+TICKERS = ["QQQ"]
 
 PERIOD1 = 631152000  # 1990-01-01
 
@@ -235,23 +235,303 @@ def compute_signal(ticker: str) -> dict:
         },
         "vote_long":  vote_long,
         "vote_short": vote_short,
+        # Chart payload — equity curve + markers from 2007-present.
+        "chart":      _compute_iter31_chart(ticker, close, prices.index[-1]),
     }
 
 
-def get_all_signals(refresh_data: bool = False) -> dict:
+def _compute_iter31_chart(ticker: str, close, as_of):
+    """Run Iter31 (ExperimentalStrategy) once to get the position series, then
+    delegate to the shared chart builder."""
+    from autoresearch.experimental_strategy import ExperimentalStrategy
+    from autoresearch.run_experiment import load_strategy
+    strat = load_strategy("autoresearch.experimental_strategy", "ExperimentalStrategy")
+    result_df = strat.execute("2007-01-03", as_of.strftime("%Y-%m-%d"), {})
+    return build_strategy_chart(ticker, result_df, close, as_of)
+
+
+def build_strategy_chart(ticker: str, result_df, close, as_of, INITIAL=10000.0) -> dict:
+    """Strategy-agnostic chart data builder. Takes the result_df from
+    strategy.execute() and produces DAILY equity + B&H curves plus paired
+    entry/exit markers from 2007 to as_of.
+
+    Daily (not weekly) resolution so the user can zoom into a single month
+    and still see every transition at its true date. Markers come in
+    matched pairs: every entry-long/entry-short is followed by exactly
+    one exit marker carrying the realized P&L of that round trip."""
+    import pandas as pd
+    chart_start = pd.Timestamp("2007-01-01")
+    chart_idx = close.index[(close.index >= chart_start) & (close.index <= as_of)]
+    # Position series from result_df (-1 / 0 / 1 per day)
+    pos = pd.Series(0, index=result_df.index, dtype=int)
+    pos[result_df["longPositionPct"] >= 1.0] = 1
+    pos[result_df["shortPositionPct"] >= 1.0] = -1
+    chart_pos = pos.reindex(chart_idx, method="ffill").fillna(0).astype(int)
+    chart_close = close.reindex(chart_idx).astype(float)
+
+    # Daily equity curve (mark-to-market on close prices, prior day's position)
+    strat_equity = [INITIAL]
+    prev_close = float(chart_close.iloc[0])
+    for i in range(1, len(chart_close)):
+        cur = float(chart_close.iloc[i])
+        ret = cur / prev_close - 1
+        prev_pos = int(chart_pos.iloc[i - 1])
+        if prev_pos == 1:
+            strat_equity.append(strat_equity[-1] * (1 + ret))
+        elif prev_pos == -1:
+            strat_equity.append(strat_equity[-1] * (1 - ret))
+        else:
+            strat_equity.append(strat_equity[-1])
+        prev_close = cur
+    bh_equity = (chart_close / float(chart_close.iloc[0]) * INITIAL).tolist()
+
+    # Build paired entry/exit markers. Walk daily positions; whenever the
+    # position changes, emit appropriate markers and (on exit) carry the
+    # realized P&L vs the matched entry.
+    markers = []
+    open_trade = None   # dict | None
+    prev_pos = 0
+    date_strs = [d.strftime("%Y-%m-%d") for d in chart_idx]
+
+    def _emit_exit(i_close, exit_kind_suffix):
+        nonlocal open_trade
+        if open_trade is None:
+            return
+        entry_eq = open_trade["entry_equity"]
+        exit_eq  = strat_equity[i_close]
+        pnl_pct  = (exit_eq / entry_eq - 1) * 100.0
+        markers.append({
+            "x": date_strs[i_close],
+            "y": round(exit_eq, 2),
+            "kind": "exit",
+            "side": open_trade["side"],         # "long" / "short" — which trade closed
+            "entry_date": open_trade["entry_date"],
+            "exit_date": date_strs[i_close],
+            "entry_price": round(open_trade["entry_price"], 2),
+            "exit_price": round(float(chart_close.iloc[i_close]), 2),
+            "entry_equity": round(entry_eq, 2),
+            "exit_equity": round(exit_eq, 2),
+            "pnl_pct": round(pnl_pct, 2),
+            "pnl_abs": round(exit_eq - entry_eq, 2),
+            "duration": i_close - open_trade["entry_index"],
+            "profitable": exit_eq > entry_eq,
+        })
+        open_trade = None
+
+    def _emit_entry(i, side):
+        nonlocal open_trade
+        kind = "entry-long" if side == "long" else "entry-short"
+        markers.append({
+            "x": date_strs[i],
+            "y": round(strat_equity[i], 2),
+            "kind": kind,
+            "side": side,
+            "entry_date": date_strs[i],
+            "entry_price": round(float(chart_close.iloc[i]), 2),
+            "entry_equity": round(strat_equity[i], 2),
+        })
+        open_trade = {
+            "side": side,
+            "entry_date": date_strs[i],
+            "entry_price": float(chart_close.iloc[i]),
+            "entry_equity": strat_equity[i],
+            "entry_index": i,
+        }
+
+    for i in range(len(chart_idx)):
+        p = int(chart_pos.iloc[i])
+        if p == prev_pos:
+            continue
+        # Position changed. If we had an open trade, close it first.
+        if prev_pos != 0:
+            _emit_exit(i, "long" if prev_pos == 1 else "short")
+        # Then if the new position is non-flat, open a new trade.
+        if p == 1:
+            _emit_entry(i, "long")
+        elif p == -1:
+            _emit_entry(i, "short")
+        prev_pos = p
+
+    # If a trade is still open at as_of, force-close it on the last bar so
+    # every entry has a matching exit visible on the chart.
+    if open_trade is not None:
+        _emit_exit(len(chart_idx) - 1, "long" if prev_pos == 1 else "short")
+
+    return {
+        "dates":        date_strs,
+        "close":        [round(v, 2) for v in chart_close.tolist()],
+        "positions":    chart_pos.tolist(),
+        "strat_equity": [round(v, 2) for v in strat_equity],
+        "bh_equity":    [round(v, 2) for v in bh_equity],
+        "markers":      markers,
+        "initial":      INITIAL,
+    }
+
+
+def compute_signal_for_strategy(ticker: str, strategy_spec: dict) -> dict:
+    """Generic signal computation for any strategy (non-Iter31). Returns the
+    minimal shape plus a strategy-detail payload (recent position transitions,
+    param diffs vs iter31, regime snapshot, and strategy metrics) so the page
+    doesn't look empty for non-Iter31 strategies."""
+    from autoresearch.prepare import load_prices
+    from webapp.strategy_registry import instantiate_strategy
+    from autoresearch.harness.parametric_strategy import ITER31_DEFAULTS
+    import pandas as pd
+    import numpy as np
+
+    os.environ["STRATEGY_TICKER"] = ticker.upper()
+    prices = load_prices(ticker)
+    close = prices["close"].astype(float)
+    as_of = prices.index[-1]
+    # Long-horizon view: 2007-01-01 through latest available data.
+    start_dt = "2007-01-01"
+    end_dt = as_of.strftime("%Y-%m-%d")
+
+    strat = instantiate_strategy(strategy_spec, ticker=ticker)
+    result_df = strat.execute(start_dt, end_dt, {})
+
+    last = result_df.iloc[-1]
+    long_pct = float(last.get("longPositionPct", 0.0))
+    short_pct = float(last.get("shortPositionPct", 0.0))
+    if long_pct >= 1.0:
+        final = "LONG"
+    elif short_pct >= 1.0:
+        final = "SHORT"
+    else:
+        final = "CASH"
+
+    # Build a "position" series from result_df: +1 LONG / -1 SHORT / 0 CASH
+    pos = pd.Series(0, index=result_df.index, dtype=int)
+    pos[result_df["longPositionPct"] >= 1.0] = 1
+    pos[result_df["shortPositionPct"] >= 1.0] = -1
+
+    # Extract recent transitions (last 8 changes) for the detail panel
+    transitions = []
+    prev = 0
+    for date, p in pos.items():
+        if p != prev:
+            transitions.append({
+                "date": pd.Timestamp(date).strftime("%Y-%m-%d"),
+                "from": {1: "LONG", -1: "SHORT", 0: "CASH"}[prev],
+                "to": {1: "LONG", -1: "SHORT", 0: "CASH"}[int(p)],
+                "close": round(float(close.reindex([date]).iloc[-1]), 2)
+                         if date in close.index else None,
+            })
+            prev = int(p)
+    recent_transitions = transitions[-8:][::-1]  # most recent first
+
+    # Days in current position (since last transition)
+    last_change_idx = None
+    for i in range(len(pos) - 1, 0, -1):
+        if pos.iloc[i] != pos.iloc[i - 1]:
+            last_change_idx = i
+            break
+    days_in_position = (pos.index[-1] - pos.index[last_change_idx]).days if last_change_idx else 0
+
+    # Regime snapshot — pure price-data indicators, strategy-agnostic
+    sma50 = close.rolling(50).mean().iloc[-1]
+    sma200 = close.rolling(200).mean().iloc[-1]
+    in_bull = bool(sma50 > sma200) if not pd.isna(sma50) and not pd.isna(sma200) else None
+
+    def _rsi_local(s: pd.Series, period: int) -> float:
+        delta = s.diff()
+        gain = delta.where(delta > 0, 0.0).rolling(period).mean()
+        loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
+        rsi = (100 - 100 / (1 + gain / loss.replace(0, np.nan))).fillna(50)
+        return float(rsi.iloc[-1])
+
+    rsi2 = _rsi_local(close, 2)
+    rsi14 = _rsi_local(close, 14)
+    mom5 = float((close.iloc[-1] / close.iloc[-6] - 1) * 100) if len(close) > 5 else 0.0
+    mom20 = float((close.iloc[-1] / close.iloc[-21] - 1) * 100) if len(close) > 20 else 0.0
+    dd_yr = float((close.iloc[-1] / close.rolling(252).max().iloc[-1] - 1) * 100) if len(close) > 252 else 0.0
+
+    regime = {
+        "in_bull": in_bull,
+        "sma50": float(sma50) if not pd.isna(sma50) else None,
+        "sma200": float(sma200) if not pd.isna(sma200) else None,
+        "rsi2": round(rsi2, 1),
+        "rsi14": round(rsi14, 1),
+        "mom5": round(mom5, 2),
+        "mom20": round(mom20, 2),
+        "dd_yr": round(dd_yr, 2),
+    }
+
+    # Param diffs vs Iter31 — only meaningful when params dict is provided
+    diffs = []
+    params = strategy_spec.get("params") or {}
+    for k, v in sorted(params.items()):
+        if ITER31_DEFAULTS.get(k) != v:
+            diffs.append({"key": k, "iter31": ITER31_DEFAULTS.get(k), "current": v})
+
+    # Active subs row
+    active_subs = ["A", "B", "C", "D", "E", "F"]
+    for ch in "GHIJKL":
+        if int(params.get(f"enable_{ch}", 0)) == 1:
+            active_subs.append(ch)
+
+    # Position stats over the eval window
+    long_days = int((pos == 1).sum())
+    short_days = int((pos == -1).sum())
+    cash_days = int((pos == 0).sum())
+    total_days = max(len(pos), 1)
+
+    # Chart data — full 2007-onwards window via shared helper.
+    chart = build_strategy_chart(ticker, result_df, close, as_of)
+
+    return {
+        "ticker": ticker,
+        "close": float(close.iloc[-1]),
+        "day_chg": float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) > 1 else 0.0,
+        "as_of": as_of.strftime("%Y-%m-%d"),
+        "final": final,
+        "vote_long": None,
+        "vote_short": None,
+        "sub_votes": {},
+        "is_generic": True,
+        "strategy_label": strategy_spec.get("label", strategy_spec.get("id", "?")),
+        # Strategy-detail payload for the rendered panel:
+        "recent_transitions": recent_transitions,
+        "days_in_position": days_in_position,
+        "regime": regime,
+        "diffs": diffs,
+        "n_diffs": len(diffs),
+        "active_subs": active_subs,
+        "position_mix": {
+            "long_pct": round(long_days / total_days * 100, 1),
+            "short_pct": round(short_days / total_days * 100, 1),
+            "cash_pct": round(cash_days / total_days * 100, 1),
+            "window_years": round((pos.index[-1] - pos.index[0]).days / 365.25, 1),
+        },
+        "chart": chart,
+        "metrics": strategy_spec.get("metrics"),  # composite/sharpe/etc from registry
+    }
+
+
+def get_all_signals(refresh_data: bool = False, strategy_id: str = "iter31") -> dict:
+    from webapp.strategy_registry import find_strategy
+
     if refresh_data:
         for ticker in TICKERS:
             refresh_ticker(ticker)
             time.sleep(0.5)
 
+    strategy_spec = find_strategy(strategy_id)
+    is_iter31 = strategy_spec["source"] == "iter31"
+
     results = {}
     for ticker in TICKERS:
         try:
-            results[ticker] = compute_signal(ticker)
+            results[ticker] = compute_signal(ticker) if is_iter31 \
+                else compute_signal_for_strategy(ticker, strategy_spec)
         except Exception as e:
             results[ticker] = {"ticker": ticker, "error": str(e), "final": "ERROR"}
 
     return {
         "tickers": results,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "strategy": {
+            "id": strategy_spec["id"], "label": strategy_spec["label"],
+            "source": strategy_spec["source"], "description": strategy_spec["description"],
+        },
     }

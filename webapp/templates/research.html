@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Research — Harness / Adversarial / Hypothesis</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/research.css" />
+</head>
+<body>
+
+  <header>
+    <div class="header-left">
+      <h1>Research Dashboard</h1>
+      <span class="subtitle">Multi-Champion Harness · Adversarial Hunter · Hypothesis Search</span>
+    </div>
+    <div class="header-right">
+      <nav class="nav-links">
+        <a href="/" class="nav-link">Signals</a>
+        <a href="/simulation" class="nav-link">Simulation</a>
+        <a href="/research" class="nav-link active">Research</a>
+      </nav>
+      <button id="refresh-btn" onclick="refreshResearch()">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- ── Harness Status Banner ────────────────────────────────────────────── -->
+  <section class="status-banner">
+    <div class="status-item">
+      <span class="status-label">Harness</span>
+      <span class="status-value {{ 'alive' if data.harness.alive else 'dead' }}">
+        {{ 'ALIVE' if data.harness.alive else 'STOPPED' }}
+      </span>
+      {% if data.harness.pid %}<span class="status-detail">PID {{ data.harness.pid }}</span>{% endif %}
+    </div>
+    <div class="status-item">
+      <span class="status-label">Iterations</span>
+      <span class="status-value">{{ "{:,}".format(data.harness.iterations) }}</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">Promotions</span>
+      <span class="status-value">{{ data.harness.promotions }}</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">Tested combos</span>
+      <span class="status-value">{{ "{:,}".format(data.harness.tested_combos) }}</span>
+    </div>
+    <div class="status-item heartbeat">
+      <span class="status-label">Heartbeat</span>
+      <span class="status-detail">{{ data.harness.heartbeat or "—" }}</span>
+    </div>
+    <div class="status-item live">
+      <span class="status-label">Live</span>
+      <span class="status-detail" id="live-indicator"><span class="live-dot"></span> Auto-refresh on · waiting…</span>
+    </div>
+  </section>
+
+  <!-- ── Champion Pool ─────────────────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>Champion Pool · {{ data.harness.champions|length }} active</h2>
+    <p class="panel-desc">Each champion is pinned to a different optimization focus. The harness samples from all 5 each iteration; promotions require both (a) beating the target champion on its focus dim and (b) Hamming distance ≥ 4 from every other champion to preserve diversity.</p>
+
+    <div class="champion-grid">
+      {% for c in data.harness.champions %}
+      {% set m = c.metrics %}
+      {% set hl = c._headline %}
+      <div class="champion-card focus-{{ c.focus }}">
+        <div class="champion-header">
+          <span class="champion-idx">#{{ loop.index0 }}</span>
+          <span class="champion-focus">{{ c.focus }}</span>
+        </div>
+
+        <div class="champion-headline">
+          <div class="champion-headline-label">{{ hl.label }}</div>
+          <div class="champion-headline-value">{{ hl.fmt.format(hl.value) }}</div>
+        </div>
+
+        {% if c._arch_badge %}<div class="arch-badge">📌 {{ c._arch_badge }}</div>{% endif %}
+
+        <div class="active-subs-row">
+          {% for sub in c._active_subs %}<span class="sub-chip on">{{ sub }}</span>{% endfor %}
+          {% set inactive = [] %}
+          {% for sub in "GHIJKL" %}{% if sub not in c._active_subs %}{% set _ = inactive.append(sub) %}{% endif %}{% endfor %}
+          {% if inactive %}<span class="sub-chip-off-summary" title="Disabled: {{ inactive|join(', ') }}">+{{ inactive|length }} off</span>{% endif %}
+        </div>
+
+        <div class="champion-metrics">
+          <div><span>Score</span><strong>{{ "%.1f"|format(m.score) }}</strong></div>
+          <div><span>Ret</span><strong>{{ "{:,.0f}%".format(m.mean_return_pct) }}</strong></div>
+          <div><span>Sharpe</span><strong>{{ "%.2f"|format(m.mean_sharpe) }}</strong></div>
+          <div><span>Outperf</span><strong>{{ "%.2f"|format(m.mean_outperf) }}x</strong></div>
+          <div><span>MinRatio</span><strong>{{ "%.3f"|format(m.min_ratio) }}</strong></div>
+          <div><span>MaxDD</span><strong>{{ "%.1f"|format(m.mean_max_dd_pct) }}%</strong></div>
+        </div>
+
+        <div class="champion-diffs">
+          <span class="diff-count">{{ c._n_diffs }} param{{ '' if c._n_diffs == 1 else 's' }} ≠ iter31</span>
+          {% if c._diffs %}
+          <details>
+            <summary>show diffs</summary>
+            <table class="diff-table">
+              {% for k, d in c._diffs.items() %}
+              <tr><td>{{ k }}</td><td class="prev">{{ d.iter31 }}</td><td class="arrow">→</td><td class="curr">{{ d.current }}</td></tr>
+              {% endfor %}
+            </table>
+          </details>
+          {% endif %}
+        </div>
+        <div class="champion-label" title="{{ c.label }}">{{ c.label[:24] }}{% if c.label|length > 24 %}…{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if data.diversity %}
+    <details class="diversity-block">
+      <summary>Pairwise Hamming distance (≥ 4 required for promotion)</summary>
+      <table class="diversity-table">
+        <thead><tr><th></th>{% for i in range(data.diversity|length) %}<th>#{{ i }}</th>{% endfor %}</tr></thead>
+        <tbody>
+        {% for row in data.diversity %}
+          <tr><th>#{{ loop.index0 }}</th>
+          {% for d in row %}
+            {% if loop.index0 == loop.index0 %}{% endif %}
+            <td class="dist-cell {% if d == 0 %}self{% elif d < 4 %}danger{% elif d < 8 %}warn{% else %}ok{% endif %}">
+              {% if d == 0 and loop.index0 == loop.cycle(0,1,2,3,4) %}—{% else %}{{ d }}{% endif %}
+            </td>
+          {% endfor %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+  </section>
+
+  <!-- ── Adversarial Regime Hunter ────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>Adversarial Regime Hunter</h2>
+    <div class="counter-row">
+      <div class="counter"><div class="cnt-val">{{ data.adversarial.total_cycles }}</div><div class="cnt-lbl">Cycles</div></div>
+      <div class="counter generalizes"><div class="cnt-val">{{ data.adversarial.verdicts.get('generalizes', 0) }}</div><div class="cnt-lbl">Generalizes</div></div>
+      <div class="counter overfits"><div class="cnt-val">{{ data.adversarial.verdicts.get('overfits', 0) }}</div><div class="cnt-lbl">Overfits</div></div>
+      <div class="counter regresses"><div class="cnt-val">{{ data.adversarial.verdicts.get('regresses-elsewhere', 0) }}</div><div class="cnt-lbl">Regresses</div></div>
+      <div class="counter candidates"><div class="cnt-val">{{ data.adversarial.candidates|length }}</div><div class="cnt-lbl">Candidates Saved</div></div>
+    </div>
+
+    {% if data.adversarial.generalizing %}
+    <h3>Generalizing Patches ({{ data.adversarial.generalizing|length }})</h3>
+    <div class="patch-list">
+      {% for r in data.adversarial.generalizing %}
+      <div class="patch-row">
+        <div class="patch-window">{{ r.failure_window }}</div>
+        <div class="patch-regime">
+          {% if r.regime %}
+          vol={{ r.regime.vol_regime }} · trend={{ r.regime.trend_regime }} · disp={{ r.regime.dispersion_regime }} · rate={{ r.regime.rate_regime }}
+          {% endif %}
+        </div>
+        <div class="patch-params">
+          {% for k, v in r.patch.items() %}<code>{{ k }}={{ v }}</code>{% endfor %}
+        </div>
+        {% if r.validation %}
+        <div class="patch-validation">
+          fail {{ "%.1f"|format(r.validation.fail_window_baseline_ret) }}% → {{ "%.1f"|format(r.validation.fail_window_patched_ret) }}% ·
+          {{ r.validation.notes }}
+        </div>
+        {% endif %}
+        <div class="patch-summary">{{ r.summary[:200] }}{% if r.summary|length > 200 %}…{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <h3>Recent Cycles</h3>
+    <table class="data-table">
+      <thead><tr>
+        <th>Time</th><th>Failure Window</th><th>Regime</th><th>Patch Targets</th><th>Verdict</th><th>Reason</th>
+      </tr></thead>
+      <tbody>
+        {% for r in data.adversarial.recent %}
+        <tr class="verdict-{{ r.verdict or 'unknown' }}">
+          <td class="ts">{{ r.ts[5:16] if r.ts else "—" }}</td>
+          <td>{{ r.failure_window or "—" }}</td>
+          <td>{% if r.regime %}{{ r.regime.vol_regime }}/{{ r.regime.trend_regime }}/{{ r.regime.dispersion_regime }}{% endif %}</td>
+          <td>{% if r.patch %}{{ r.patch.keys()|list|join(', ') }}{% endif %}</td>
+          <td><span class="verdict-badge {{ r.verdict or 'unknown' }}">{{ r.verdict or '—' }}</span></td>
+          <td class="reason-cell">{% if r.validation %}{{ r.validation.notes or '' }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ── Hypothesis Feature Search ────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>Hypothesis Feature Search</h2>
+    <div class="counter-row">
+      <div class="counter"><div class="cnt-val">{{ data.hypothesis.total_hypotheses }}</div><div class="cnt-lbl">Hypotheses Tested</div></div>
+      <div class="counter generalizes"><div class="cnt-val">{{ data.hypothesis.statuses.get('kept', 0) }}</div><div class="cnt-lbl">Kept (BH-passed)</div></div>
+      <div class="counter overfits"><div class="cnt-val">{{ data.hypothesis.statuses.get('discarded', 0) }}</div><div class="cnt-lbl">Discarded</div></div>
+      <div class="counter unsupported"><div class="cnt-val">{{ data.hypothesis.statuses.get('spec-unsupported', 0) }}</div><div class="cnt-lbl">Unsupported</div></div>
+      <div class="counter"><div class="cnt-val">{{ data.hypothesis.seen_papers }}</div><div class="cnt-lbl">Papers Seen</div></div>
+    </div>
+
+    {% if data.hypothesis.kept %}
+    <h3>Kept Signals ({{ data.hypothesis.kept|length }})</h3>
+    <div class="kept-list">
+      {% for r in data.hypothesis.kept %}
+      <div class="kept-row">
+        <div class="kept-title">{{ r.paper_title or "—" }}</div>
+        {% if r.paper_url %}<div class="kept-url"><a href="{{ r.paper_url }}" target="_blank" rel="noopener">{{ r.paper_url[:80] }}{% if r.paper_url|length > 80 %}…{% endif %}</a></div>{% endif %}
+        <div class="kept-hypothesis">{{ r.hypothesis }}</div>
+        {% if r.outcome %}
+        <div class="kept-stats">
+          ρ_holdout = <strong>{{ "%+.4f"|format(r.outcome.holdout_rho or 0) }}</strong> ·
+          p = <strong>{{ "%.4f"|format(r.outcome.p_value or 0) }}</strong> ·
+          BH = {{ "%.4f"|format(r.outcome.bh_threshold or 0) }} ·
+          n_holdout = {{ r.outcome.holdout_n or 0 }}
+        </div>
+        {% endif %}
+        {% if r.feature_spec %}<div class="kept-spec"><code>{{ r.feature_spec | tojson }}</code></div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <h3>Recent Tests</h3>
+    <table class="data-table">
+      <thead><tr>
+        <th>Time</th><th>Paper</th><th>Hypothesis</th><th>Holdout ρ</th><th>p</th><th>Status</th>
+      </tr></thead>
+      <tbody>
+        {% for r in data.hypothesis.recent %}
+        <tr class="verdict-{{ r.status or 'unknown' }}">
+          <td class="ts">{{ r.ts[5:16] if r.ts else "—" }}</td>
+          <td class="paper-cell">{{ (r.paper_title or "—")[:50] }}</td>
+          <td class="hyp-cell">{{ (r.hypothesis or "—")[:80] }}</td>
+          <td>{% if r.outcome %}{{ "%+.3f"|format(r.outcome.holdout_rho or 0) }}{% endif %}</td>
+          <td>{% if r.outcome %}{{ "%.3f"|format(r.outcome.p_value or 0) }}{% endif %}</td>
+          <td><span class="verdict-badge {{ r.status or 'unknown' }}">{{ r.status or '—' }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ── Monitor / Search Progress ─────────────────────────────────────────── -->
+  {% if data.monitor.history_rows > 0 %}
+  <section class="panel">
+    <h2>Search Progress · {{ data.monitor.history_rows }} hourly snapshots</h2>
+    <canvas id="score-chart" height="220"></canvas>
+  </section>
+  {% endif %}
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script>
+    async function refreshResearch() {
+      const btn = document.getElementById('refresh-btn');
+      btn.disabled = true; btn.textContent = '↻ Refreshing data…';
+      try { sessionStorage.setItem('research-scroll', String(window.scrollY)); } catch (e) {}
+      try {
+        // Pull fresh OHLCV and clear every strategy's sim/signal cache before
+        // reload — otherwise the Simulation page will keep serving stale
+        // backtest data for champion strategies.
+        await fetch('/api/refresh');
+      } catch (e) { /* fall through to reload anyway */ }
+      window.location.reload();
+    }
+
+    // Restore scroll position after auto-reload
+    window.addEventListener('load', () => {
+      try {
+        const y = sessionStorage.getItem('research-scroll');
+        if (y) { window.scrollTo(0, parseInt(y, 10)); sessionStorage.removeItem('research-scroll'); }
+      } catch (e) {}
+    });
+
+    // ── Live auto-refresh: poll /api/research every 30s. If any of the
+    // routine-driven counters change, soft-reload the page so all sections
+    // (champion cards, ledger tables, chart) re-render with fresh data.
+    const POLL_MS = 30000;
+    const initialState = {
+      adv_cycles: {{ data.adversarial.total_cycles }},
+      hyp_cycles: {{ data.hypothesis.total_hypotheses }},
+      mon_rows:   {{ data.monitor.history_rows }},
+      iters:      {{ data.harness.iterations }},
+      promotions: {{ data.harness.promotions }},
+    };
+
+    let pollTimer = null;
+    async function pollResearch() {
+      try {
+        const r = await fetch('/api/research');
+        if (!r.ok) return;
+        const j = await r.json();
+        const live = {
+          adv_cycles: j.adversarial.total_cycles,
+          hyp_cycles: j.hypothesis.total_hypotheses,
+          mon_rows:   j.monitor.history_rows,
+          iters:      j.harness.iterations,
+          promotions: j.harness.promotions,
+        };
+        updateLiveIndicator(live);
+        const changed = ['adv_cycles','hyp_cycles','mon_rows','promotions']
+          .some(k => live[k] !== initialState[k]);
+        if (changed) {
+          // Cancel further polls and reload to re-render the page with fresh
+          // routine results. Heartbeat-only changes (iters bumping) don't trigger
+          // reload — they're surfaced via the live indicator instead.
+          clearInterval(pollTimer);
+          try { sessionStorage.setItem('research-scroll', String(window.scrollY)); } catch (e) {}
+          window.location.reload();
+        }
+      } catch (e) { /* silent — routine fires may not be aligned with poll */ }
+    }
+
+    function updateLiveIndicator(live) {
+      const el = document.getElementById('live-indicator');
+      if (!el) return;
+      const t = new Date().toLocaleTimeString('en-US', {hour12: false});
+      const iterDelta = live.iters - initialState.iters;
+      el.innerHTML = `<span class="live-dot"></span> Auto-refresh on · last check ${t}` +
+                     (iterDelta > 0 ? ` · +${iterDelta.toLocaleString()} iters since load` : '');
+    }
+    // Kick off polling
+    pollTimer = setInterval(pollResearch, POLL_MS);
+    // Run one immediate poll on load so the timestamp shows
+    pollResearch();
+
+    {% if data.monitor.history_rows > 0 %}
+    const history = {{ data.monitor.recent_history | tojson }};
+    const labels = history.map(h => (h.ts || '').slice(5, 16));
+    const scores = history.map(h => (h.best ? h.best.score : h.score));
+    const ctx = document.getElementById('score-chart').getContext('2d');
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Best champion score',
+          data: scores,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.1)',
+          fill: true, tension: 0.2, pointRadius: 3,
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          x: { ticks: { color: '#94a3b8' }, grid: { color: '#252a35' } },
+          y: { ticks: { color: '#94a3b8' }, grid: { color: '#252a35' } }
+        },
+        plugins: { legend: { labels: { color: '#e2e8f0' } } }
+      }
+    });
+    {% endif %}
+  </script>
+</body>
+</html>
